@@ -391,6 +391,39 @@ h1 {
   letter-spacing: -0.055em;
 }
 
+.room-console {
+  display: grid;
+  grid-template-columns: 1fr minmax(220px, 320px) auto;
+  gap: 14px;
+  align-items: end;
+  border: 1px solid var(--line);
+  background: rgba(10, 12, 8, 0.78);
+  padding: 14px;
+}
+
+.room-console strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--bone);
+  font-family: var(--title);
+  font-size: 22px;
+}
+
+.room-console label {
+  margin-top: 0;
+}
+
+.room-console small {
+  display: block;
+  color: var(--parchment-dim);
+  margin-top: 4px;
+}
+
+.room-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .game-frame-wide {
   border: 0;
   background: transparent;
@@ -519,6 +552,20 @@ h1 {
 .leaderboard {
   display: grid;
   gap: 10px;
+}
+
+.empty-state {
+  border: 1px dashed var(--line);
+  color: var(--parchment-dim);
+  padding: 18px;
+}
+
+.empty-state strong {
+  color: var(--bone);
+}
+
+.empty-state p {
+  margin-bottom: 0;
 }
 
 .leader-row {
@@ -698,6 +745,64 @@ h1 {
   margin-bottom: 12px;
 }
 
+.locked-challenge {
+  min-height: 360px;
+  display: grid;
+  align-content: center;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.artifact-panel {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid rgba(168, 76, 53, 0.44);
+  background: rgba(168, 76, 53, 0.07);
+  padding: 14px;
+  margin: 18px 0;
+}
+
+.artifact-glyph {
+  border: 1px solid var(--line);
+  background: #070907;
+  padding: 10px;
+}
+
+.artifact-glyph svg {
+  display: block;
+  width: 100%;
+  fill: none;
+  stroke: var(--rust);
+  stroke-width: 4;
+  stroke-linejoin: round;
+}
+
+.artifact-panel p {
+  color: var(--parchment-dim);
+  line-height: 1.52;
+}
+
+.artifact-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.artifact-flags b {
+  border: 1px solid rgba(168, 76, 53, 0.5);
+  color: var(--bone);
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
 .prompt {
   color: var(--bone);
   font-size: 18px;
@@ -708,6 +813,48 @@ h1 {
 .instruction {
   color: var(--parchment-dim);
   margin: 0 0 22px;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.evidence-card {
+  display: grid;
+  gap: 8px;
+  min-height: 156px;
+  text-align: left;
+  border: 1px solid var(--line);
+  color: var(--parchment);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 14px;
+}
+
+.evidence-card:hover,
+.evidence-card.is-selected {
+  border-color: var(--gold);
+  background: rgba(201, 181, 107, 0.1);
+}
+
+.evidence-card span {
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.evidence-card strong {
+  color: var(--bone);
+  font-size: 18px;
+}
+
+.evidence-card small {
+  color: var(--parchment-dim);
+  line-height: 1.45;
 }
 
 label {
@@ -762,6 +909,10 @@ input:focus {
 .score-strip strong {
   color: var(--bone);
   font-size: 18px;
+}
+
+.readiness-strip strong {
+  color: var(--gold);
 }
 
 .wallet-gate {
@@ -902,6 +1053,15 @@ input:focus {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .evidence-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .room-console,
+  .artifact-panel {
+    grid-template-columns: 1fr;
+  }
+
   .raid-stats {
     grid-template-columns: 1fr;
   }
@@ -915,6 +1075,7 @@ input:focus {
   .site-nav,
   .play-header,
   .packet-foot,
+  .room-actions,
   .game-topbar {
     flex-direction: column;
     align-items: stretch;

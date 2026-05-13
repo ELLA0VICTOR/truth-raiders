@@ -8,7 +8,7 @@ from genlayer import *
 
 
 MAX_ROOM_PLAYERS = 8
-MAX_ROUNDS = 4
+MAX_ROUNDS = 5
 MAX_TEXT = 1200
 MAX_URL = 220
 MAX_LEADERBOARD = 16

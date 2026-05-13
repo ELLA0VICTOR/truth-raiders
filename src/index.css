@@ -37,9 +37,6 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background-color: var(--ink);
-  background-image:
-    repeating-linear-gradient(0deg, transparent 0 23px, rgba(217, 205, 167, 0.025) 23px 24px),
-    repeating-linear-gradient(90deg, transparent 0 23px, rgba(217, 205, 167, 0.025) 23px 24px);
 }
 
 button,

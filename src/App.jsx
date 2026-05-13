@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
-import { AVATARS, CHAMBERS, RAID_PLAYERS, RAID_SEASON, scoreLocalSubmission } from './data/raidContent'
+import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
+import { AVATARS, CHAMBERS, RAID_SEASON, getReadiness } from './data/raidContent'
 import './App.css'
 
 const TABS = [
@@ -84,30 +85,68 @@ function Nav({ activeTab, onTabChange, walletAddress, onConnect, onDisconnect, i
   )
 }
 
-function Leaderboard({ players, submissions }) {
+function ArtifactPanel({ artifact }) {
+  if (!artifact) return null
+
+  return (
+    <div className="artifact-panel" aria-label={artifact.title}>
+      <div className="artifact-glyph">
+        <svg viewBox="0 0 260 170" role="img" aria-label="Poisoned evidence relic">
+          <rect x="18" y="18" width="224" height="134" />
+          <path d="M130 34 196 70v62H64V70l66-36Z" />
+          <path d="M88 82h84M88 106h84M104 130h52" />
+          <circle cx="130" cy="76" r="18" />
+          <path d="m117 76 9 9 20-24" />
+          <path d="M42 42h38M180 128h38M42 128h22M196 42h22" />
+        </svg>
+      </div>
+      <div>
+        <span className="kicker">{artifact.title}</span>
+        <p>{artifact.caption}</p>
+        <div className="artifact-flags">
+          {artifact.flags.map((flag) => (
+            <b key={flag}>{flag}</b>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Leaderboard({ walletAddress, handle, submissions }) {
   const ranked = useMemo(() => {
-    return players
-      .map((player) => {
-        const earned = submissions
-          .filter((submission) => submission.playerId === player.id)
-          .reduce((total, submission) => total + submission.score, 0)
-        return { ...player, xp: player.xp + earned }
-      })
-      .sort((a, b) => b.xp - a.xp)
-  }, [players, submissions])
+    if (!walletAddress || submissions.length === 0) return []
+
+    const completed = submissions.filter((submission) => submission.wallet === walletAddress)
+    return [
+      {
+        id: walletAddress,
+        name: handle || shortAddress(walletAddress),
+        status: `${completed.length}/${CHAMBERS.length} packets locked`,
+        xp: 'pending',
+      },
+    ]
+  }, [handle, submissions, walletAddress])
 
   return (
     <div className="leaderboard">
-      {ranked.map((player, index) => (
-        <div className="leader-row" key={player.id}>
-          <span className="rank">{String(index + 1).padStart(2, '0')}</span>
-          <div>
-            <strong>{player.name}</strong>
-            <small>{player.status}</small>
+      {ranked.length > 0 ? (
+        ranked.map((player, index) => (
+          <div className="leader-row" key={player.id}>
+            <span className="rank">{String(index + 1).padStart(2, '0')}</span>
+            <div>
+              <strong>{player.name}</strong>
+              <small>{player.status}</small>
+            </div>
+            <b>{player.xp === 'pending' ? 'XP pending' : `${player.xp} XP`}</b>
           </div>
-          <b>{player.xp} XP</b>
+        ))
+      ) : (
+        <div className="empty-state">
+          <strong>No finalized raiders yet</strong>
+          <p>Leaderboard entries appear after a wallet submits level packets and GenLayer scoring is wired to the deployed contract.</p>
         </div>
-      ))}
+      )}
     </div>
   )
 }
@@ -138,7 +177,7 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
           <div className="mode-chip">
             <span className="wallet-light" />
             <b>{walletAddress ? 'Wallet ready' : 'Wallet required for scored runs'}</b>
-            <small>Current build uses local preview data until the deployed contract address is wired.</small>
+            <small>Final XP requires the deployed Truth Raiders contract and GenLayer validator scoring.</small>
           </div>
         </div>
 
@@ -152,7 +191,7 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
         <article className="feature-card">
           <TimerIcon />
           <h2>5-15 minute rooms</h2>
-          <p>Players join a short weekly raid with four levels and a final leaderboard.</p>
+          <p>Players join a short weekly raid with five evidence-heavy levels and a final leaderboard.</p>
         </article>
         <article className="feature-card">
           <ScrollIcon />
@@ -184,24 +223,31 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
 function PlayPage({
   raidStarted,
   startRaid,
-  activeChamberIndex,
-  setActiveChamberIndex,
+  openedLevelIndex,
+  openLevel,
   nearChamber,
   setNearChamber,
   walletAddress,
   onConnect,
   walletError,
+  contract,
+  handle,
+  setHandle,
+  roomCreated,
+  createRoom,
+  roomJoined,
+  joinRoom,
   answer,
   setAnswer,
-  sourceUrl,
-  setSourceUrl,
+  selectedEvidenceUrl,
+  setSelectedEvidenceUrl,
   submitChamber,
   gameReady,
   setGameReady,
-  currentScore,
+  readiness,
 }) {
-  const activeChamber = CHAMBERS[activeChamberIndex]
-  const levelNumber = String(activeChamberIndex + 1).padStart(2, '0')
+  const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
+  const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
 
   return (
     <section className="play-page page-reveal">
@@ -215,6 +261,35 @@ function PlayPage({
         </button>
       </div>
 
+      <div className="room-console">
+        <div>
+          <span className="kicker">Room {RAID_SEASON.roomCode}</span>
+          <strong>{roomJoined ? 'Joined and ready' : contract.configured ? 'Join before submitting' : 'Deploy contract to join on-chain'}</strong>
+          {contract.configured ? (
+            <small>Contract room #{contract.roomId}</small>
+          ) : (
+            <small>Set VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS after deployment.</small>
+          )}
+        </div>
+        <label>
+          Raider handle
+          <input
+            value={handle}
+            onChange={(event) => setHandle(event.target.value)}
+            placeholder="Your display name"
+            disabled={roomJoined}
+          />
+        </label>
+        <div className="room-actions">
+          <button className="secondary-action" type="button" onClick={createRoom} disabled={!walletAddress || roomCreated || !contract.configured || contract.isLoading}>
+            {roomCreated ? 'Room created' : 'Create room'}
+          </button>
+          <button className="secondary-action" type="button" onClick={joinRoom} disabled={!walletAddress || !handle.trim() || roomJoined || !roomCreated || !contract.configured || contract.isLoading}>
+            {roomJoined ? 'Room joined' : contract.isLoading ? 'Working...' : 'Join room'}
+          </button>
+        </div>
+      </div>
+
       <div className="game-frame game-frame-wide">
         <div className="game-topbar">
           <span>{gameReady ? 'raid engine online' : 'loading raid engine'}</span>
@@ -224,7 +299,7 @@ function PlayPage({
           <TruthRaidersGame
             avatarFrame={AVATARS[0].frame}
             onReady={() => setGameReady(true)}
-            onChamber={(index) => setActiveChamberIndex(index)}
+            onChamber={(index) => openLevel(index)}
             onProximity={(index) => setNearChamber(index)}
           />
         ) : (
@@ -238,51 +313,94 @@ function PlayPage({
 
       <section className="play-main">
         <div className="panel submission-panel">
-          <div className="panel-heading">
-            <span>Level {levelNumber}</span>
-            <span className="fine">{activeChamber.label}</span>
-          </div>
-          <h2>{activeChamber.title}</h2>
-          <p className="prompt">{activeChamber.prompt}</p>
-          <p className="instruction">{activeChamber.instruction}</p>
+          {activeChamber ? (
+            <>
+              <div className="panel-heading">
+                <span>Level {levelNumber}</span>
+                <span className="fine">{activeChamber.label}</span>
+              </div>
+              <h2>{activeChamber.title}</h2>
+              <p className="prompt">{activeChamber.prompt}</p>
+              <p className="instruction">{activeChamber.instruction}</p>
 
-          <label>
-            Raider answer
-            <textarea
-              value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
-              placeholder="Write a concise answer that validators can judge..."
-            />
-          </label>
+              <div className="task-list">
+                {activeChamber.tasks.map((task, index) => (
+                  <div className="rule-row" key={task}>
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <p>{task}</p>
+                  </div>
+                ))}
+              </div>
 
-          <label>
-            Evidence URL
-            <input
-              value={sourceUrl}
-              onChange={(event) => setSourceUrl(event.target.value)}
-              placeholder="https://docs.genlayer.com/..."
-            />
-          </label>
+              <ArtifactPanel artifact={activeChamber.artifact} />
 
-          <div className="score-strip">
-            <span>local preview score</span>
-            <strong>{currentScore} XP</strong>
-          </div>
+              <div className="evidence-grid">
+                {activeChamber.evidence.map((evidence) => (
+                  <button
+                    className={`evidence-card ${selectedEvidenceUrl === evidence.url ? 'is-selected' : ''}`}
+                    key={evidence.url}
+                    type="button"
+                    onClick={() => setSelectedEvidenceUrl(evidence.url)}
+                  >
+                    <span>{evidence.source}</span>
+                    <strong>{evidence.title}</strong>
+                    <small>{evidence.clue}</small>
+                  </button>
+                ))}
+              </div>
 
-          {!walletAddress && (
-            <div className="wallet-gate">
-              <strong>Wallet needed for scored submissions</strong>
-              <p>Connect before sealing answers so XP can belong to a player address.</p>
-              <button className="secondary-action" type="button" onClick={onConnect}>
-                Connect wallet
+              <label>
+                Raider answer
+                <textarea
+                  value={answer}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  placeholder="Complete the level tasks using the selected evidence..."
+                />
+              </label>
+
+              <div className="score-strip readiness-strip">
+                <span>{readiness.label}</span>
+                <strong>{readiness.completed}/{readiness.required}</strong>
+              </div>
+
+              {!walletAddress && (
+                <div className="wallet-gate">
+                  <strong>Wallet needed for scored submissions</strong>
+                  <p>Connect before sealing answers so XP can belong to a player address.</p>
+                  <button className="secondary-action" type="button" onClick={onConnect}>
+                    Connect wallet
+                  </button>
+                  {walletError && <small>{walletError}</small>}
+                </div>
+              )}
+              {walletAddress && !roomJoined && (
+                <div className="wallet-gate">
+                  <strong>Join the room first</strong>
+                  <p>{contract.configured ? 'Add a handle in the room console so the contract can register your run.' : 'Deploy and configure the contract address before final scoring.'}</p>
+                </div>
+              )}
+
+              <button
+                className="primary-action wide"
+                type="button"
+                onClick={submitChamber}
+                disabled={!walletAddress || !roomJoined || !readiness.ready || !contract.configured || contract.isLoading}
+              >
+                {contract.isLoading ? 'Submitting...' : walletAddress ? 'Submit to GenLayer judging' : 'Connect wallet to submit'}
               </button>
-              {walletError && <small>{walletError}</small>}
+              {contract.error && <p className="contract-error">{contract.error}</p>}
+            </>
+          ) : (
+            <div className="locked-challenge">
+              <div className="panel-heading">
+                <span>Challenge locked</span>
+                <span className="fine">open a level</span>
+              </div>
+              <h2>Find a glowing marker</h2>
+              <p className="prompt">Walk to a level marker in the dungeon and press Space to reveal the challenge.</p>
+              <p className="instruction">Questions and evidence cards only appear after you open a level.</p>
             </div>
           )}
-
-          <button className="primary-action wide" type="button" onClick={submitChamber} disabled={!answer.trim() || !walletAddress}>
-            {walletAddress ? 'Seal answer for GenLayer judging' : 'Connect wallet to seal answer'}
-          </button>
         </div>
 
         <div className="panel how-to-play">
@@ -292,7 +410,7 @@ function PlayPage({
           </div>
           <div className="rule-row">
             <span>01</span>
-            <p>Click Start raid, then move with WASD or arrow keys.</p>
+            <p>Connect wallet, add a handle, join the room, then click Start raid.</p>
           </div>
           <div className="rule-row">
             <span>02</span>
@@ -300,7 +418,7 @@ function PlayPage({
           </div>
           <div className="rule-row">
             <span>03</span>
-            <p>Answer the prompt, add an evidence URL if you have one, then submit for scoring.</p>
+            <p>Complete the task list, choose an evidence card, and write one strong answer.</p>
           </div>
           <div className="rule-row">
             <span>04</span>
@@ -312,16 +430,16 @@ function PlayPage({
   )
 }
 
-function LeaderboardPage({ players, submissions }) {
+function LeaderboardPage({ walletAddress, handle, submissions }) {
   return (
     <section className="leaderboard-page page-reveal">
       <div className="page-title">
         <span className="kicker">Weekly XP distribution</span>
         <h1>Leaderboard</h1>
-        <p>Demo squad plus your local submissions now; contract-backed XP after deployment.</p>
+        <p>No fake raiders. Final XP appears after GenLayer validator scoring finalizes submitted packets.</p>
       </div>
       <div className="leaderboard-shell">
-        <Leaderboard players={players} submissions={submissions} />
+        <Leaderboard walletAddress={walletAddress} handle={handle} submissions={submissions} />
         <div className="panel">
           <div className="panel-heading">
             <span>Prize logic</span>
@@ -343,7 +461,7 @@ function FaqPage() {
   const faqs = [
     ['Is this multiplayer?', 'Yes. The MVP shows a room roster and shared raid structure; the next layer adds realtime room presence while GenLayer remains the scoring authority.'],
     ['Why GenLayer?', 'The game needs subjective judging: answer quality, evidence strength, safety, and XP fairness. That is where Intelligent Contracts and Optimistic Democracy fit.'],
-    ['How long is a match?', 'The intended community format is 5-15 minutes with four short chambers and one final leaderboard reveal.'],
+    ['How long is a match?', 'The intended community format is 5-15 minutes with five evidence-heavy levels and one final leaderboard reveal.'],
     ['Can it replay weekly?', 'Yes. Each week can use a new raid seed, new claims, new evidence tasks, and a fresh XP leaderboard.'],
   ]
 
@@ -371,15 +489,21 @@ function App() {
   const [walletError, setWalletError] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [raidStarted, setRaidStarted] = useState(false)
-  const [activeChamberIndex, setActiveChamberIndex] = useState(0)
+  const [handle, setHandle] = useState('')
+  const [roomCreated, setRoomCreated] = useState(false)
+  const [roomJoined, setRoomJoined] = useState(false)
+  const [, setActiveChamberIndex] = useState(0)
+  const [openedLevelIndex, setOpenedLevelIndex] = useState(null)
   const [nearChamber, setNearChamber] = useState(null)
   const [answer, setAnswer] = useState('')
-  const [sourceUrl, setSourceUrl] = useState('')
+  const [selectedEvidenceUrl, setSelectedEvidenceUrl] = useState('')
   const [submissions, setSubmissions] = useState([])
   const [gameReady, setGameReady] = useState(false)
 
-  const activeChamber = CHAMBERS[activeChamberIndex]
-  const currentScore = scoreLocalSubmission(answer, sourceUrl, activeChamberIndex)
+  const contract = useTruthRaidersContract(walletAddress)
+  const { configured: contractConfigured, getRoom } = contract
+  const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
+  const readiness = getReadiness(answer, selectedEvidenceUrl, activeChamber)
 
   useEffect(() => {
     if (!window.ethereum) return undefined
@@ -398,22 +522,61 @@ function App() {
     return () => window.ethereum.removeListener?.('accountsChanged', handleAccountsChanged)
   }, [])
 
-  const players = useMemo(() => {
-    return RAID_PLAYERS.map((player) =>
-      player.id === 'you'
-        ? {
-            ...player,
-            name: walletAddress ? shortAddress(walletAddress) : 'You',
-            status: walletAddress ? (raidStarted ? 'inside raid' : 'wallet ready') : 'connect wallet',
-          }
-        : player
-    )
-  }, [raidStarted, walletAddress])
+  useEffect(() => {
+    if (!contractConfigured || !walletAddress) return undefined
+
+    let cancelled = false
+    getRoom()
+      .then(() => {
+        if (!cancelled) setRoomCreated(true)
+      })
+      .catch(() => {
+        if (!cancelled) setRoomCreated(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [contractConfigured, getRoom, walletAddress])
 
   function startRaid() {
     setRaidStarted(true)
     setActiveTab('play')
     setActiveChamberIndex(0)
+    setOpenedLevelIndex(null)
+    setAnswer('')
+    setSelectedEvidenceUrl('')
+  }
+
+  function openLevel(index) {
+    const chamber = CHAMBERS[index]
+    setActiveChamberIndex(index)
+    setOpenedLevelIndex(index)
+    setAnswer('')
+    setSelectedEvidenceUrl(chamber.evidence[0]?.url ?? '')
+    window.setTimeout(() => {
+      document.querySelector('.submission-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 80)
+  }
+
+  async function createRoom() {
+    if (!walletAddress || !contract.configured) return
+    try {
+      await contract.createRoom()
+      setRoomCreated(true)
+    } catch {
+      setRoomCreated(false)
+    }
+  }
+
+  async function joinRoom() {
+    if (!walletAddress || !handle.trim() || !roomCreated || !contract.configured) return
+    try {
+      await contract.joinRoom(handle.trim())
+      setRoomJoined(true)
+    } catch {
+      setRoomJoined(false)
+    }
   }
 
   async function connectWallet() {
@@ -438,24 +601,44 @@ function App() {
   function disconnectWallet() {
     setWalletAddress('')
     setWalletError('')
+    setRoomCreated(false)
+    setRoomJoined(false)
   }
 
-  function submitChamber() {
-    if (!answer.trim() || !walletAddress) return
+  async function submitChamber() {
+    if (!activeChamber || openedLevelIndex === null || !walletAddress || !roomJoined || !readiness.ready || !contract.configured) return
 
-    const score = currentScore
+    try {
+      await contract.submitRound(openedLevelIndex, activeChamber.label, answer.trim(), selectedEvidenceUrl)
+      await contract.scoreRound(
+        openedLevelIndex,
+        walletAddress,
+        `${activeChamber.prompt}\nTasks:\n${activeChamber.tasks.join('\n')}`,
+        activeChamber.scoring.join(',')
+      )
+    } catch {
+      return
+    }
+
     setSubmissions((current) => [
       ...current.filter((submission) => submission.chamberId !== activeChamber.id || submission.playerId !== 'you'),
       {
         playerId: 'you',
+        wallet: walletAddress,
+        handle: handle.trim(),
         chamberId: activeChamber.id,
+        chamberLabel: activeChamber.label,
         answer: answer.trim(),
-        sourceUrl: sourceUrl.trim(),
-        score,
+        sourceUrl: selectedEvidenceUrl,
+        tasks: activeChamber.tasks,
+        scoring: activeChamber.scoring,
+        status: 'ready_for_genlayer',
+        createdAt: new Date().toISOString(),
       },
     ])
     setAnswer('')
-    setSourceUrl('')
+    setSelectedEvidenceUrl('')
+    setOpenedLevelIndex(null)
     setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
   }
 
@@ -475,24 +658,31 @@ function App() {
         <PlayPage
           raidStarted={raidStarted}
           startRaid={startRaid}
-          activeChamberIndex={activeChamberIndex}
-          setActiveChamberIndex={setActiveChamberIndex}
+          openedLevelIndex={openedLevelIndex}
+          openLevel={openLevel}
           nearChamber={nearChamber}
           setNearChamber={setNearChamber}
           walletAddress={walletAddress}
           onConnect={connectWallet}
           walletError={walletError}
+          contract={contract}
+          handle={handle}
+          setHandle={setHandle}
+          roomCreated={roomCreated}
+          createRoom={createRoom}
+          roomJoined={roomJoined}
+          joinRoom={joinRoom}
           answer={answer}
           setAnswer={setAnswer}
-          sourceUrl={sourceUrl}
-          setSourceUrl={setSourceUrl}
+          selectedEvidenceUrl={selectedEvidenceUrl}
+          setSelectedEvidenceUrl={setSelectedEvidenceUrl}
           submitChamber={submitChamber}
           gameReady={gameReady}
           setGameReady={setGameReady}
-          currentScore={currentScore}
+          readiness={readiness}
         />
       )}
-      {activeTab === 'leaderboard' && <LeaderboardPage players={players} submissions={submissions} />}
+      {activeTab === 'leaderboard' && <LeaderboardPage walletAddress={walletAddress} handle={handle} submissions={submissions} />}
       {activeTab === 'faq' && <FaqPage />}
     </main>
   )

@@ -10,8 +10,9 @@ const MAP_HEIGHT = 13
 const CHAMBER_POINTS = [
   { x: 4, y: 3, frame: 96, id: 0 },
   { x: 15, y: 3, frame: 98, id: 1 },
-  { x: 5, y: 9, frame: 100, id: 2 },
-  { x: 15, y: 9, frame: 102, id: 3 },
+  { x: 10, y: 6, frame: 100, id: 2 },
+  { x: 5, y: 9, frame: 102, id: 3 },
+  { x: 15, y: 9, frame: 104, id: 4 },
 ]
 
 function emitGameEvent(name, detail = {}) {
