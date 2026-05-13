@@ -134,21 +134,14 @@ class AuditEvent:
 
 class TruthRaiders(gl.Contract):
     rooms: TreeMap[u256, RoomRecord]
-    players_by_room: TreeMap[u256, DynArray[Address]]
-    player_records: TreeMap[str, PlayerRecord]
-    submissions: TreeMap[str, SubmissionRecord]
-    room_submission_keys: TreeMap[u256, DynArray[str]]
+    room_players: TreeMap[u256, DynArray[PlayerRecord]]
+    room_submissions: TreeMap[u256, DynArray[SubmissionRecord]]
     audit_log: DynArray[AuditEvent]
     next_room_id: u256
     admin: Address
 
     def __init__(self, admin: Address):
         self.admin = admin
-        self.rooms = TreeMap[u256, RoomRecord]()
-        self.players_by_room = TreeMap[u256, DynArray[Address]]()
-        self.player_records = TreeMap[str, PlayerRecord]()
-        self.submissions = TreeMap[str, SubmissionRecord]()
-        self.room_submission_keys = TreeMap[u256, DynArray[str]]()
         self.audit_log = []
         self.next_room_id = u256(0)
 
@@ -158,11 +151,28 @@ class TruthRaiders(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Room does not exist")
         return key
 
-    def _player_key(self, room_id: u256, player: Address) -> str:
-        return f"{int(room_id)}:{format(player)}"
+    def _get_room_players(self, room_id: u256) -> DynArray[PlayerRecord]:
+        if room_id in self.room_players:
+            return self.room_players[room_id]
+        return []
 
-    def _submission_key(self, room_id: u256, round_id: int, player: Address) -> str:
-        return f"{int(room_id)}:{round_id}:{format(player)}"
+    def _get_room_submissions(self, room_id: u256) -> DynArray[SubmissionRecord]:
+        if room_id in self.room_submissions:
+            return self.room_submissions[room_id]
+        return []
+
+    def _find_player_index(self, players: DynArray[PlayerRecord], player: Address) -> int:
+        for index in range(len(players)):
+            if players[index].wallet == player:
+                return index
+        return -1
+
+    def _find_submission_index(self, submissions: DynArray[SubmissionRecord], round_id: int, player: Address) -> int:
+        for index in range(len(submissions)):
+            submission = submissions[index]
+            if int(submission.round_id) == round_id and submission.player == player:
+                return index
+        return -1
 
     def _append_audit(self, actor: Address, action: str, target_id: u256, details: str):
         log = self.audit_log
@@ -201,8 +211,6 @@ class TruthRaiders(gl.Contract):
         )
 
         self.rooms[room_id] = room
-        self.players_by_room[room_id] = []
-        self.room_submission_keys[room_id] = []
         self.next_room_id = u256(int(room_id) + 1)
         self._append_audit(gl.message.sender_address, "ROOM_CREATED", room_id, room.room_code)
 
@@ -213,8 +221,8 @@ class TruthRaiders(gl.Contract):
         if room.status != "open":
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Room is not open")
 
-        player_key = self._player_key(key, gl.message.sender_address)
-        if player_key in self.player_records:
+        players = self._get_room_players(key)
+        if self._find_player_index(players, gl.message.sender_address) >= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Player already joined")
         if int(room.player_count) >= MAX_ROOM_PLAYERS:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Room is full")
@@ -227,10 +235,8 @@ class TruthRaiders(gl.Contract):
             joined_at=gl.message_raw["datetime"],
         )
 
-        players = self.players_by_room[key]
-        players.append(gl.message.sender_address)
-        self.players_by_room[key] = players
-        self.player_records[player_key] = player
+        players.append(player)
+        self.room_players[key] = players
 
         room.player_count = u256(int(room.player_count) + 1)
         self.rooms[key] = room
@@ -245,12 +251,12 @@ class TruthRaiders(gl.Contract):
         if round_id < 0 or round_id >= int(room.round_count):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid round")
 
-        player_key = self._player_key(key, gl.message.sender_address)
-        if player_key not in self.player_records:
+        players = self._get_room_players(key)
+        if self._find_player_index(players, gl.message.sender_address) < 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Player has not joined")
 
-        submission_key = self._submission_key(key, round_id, gl.message.sender_address)
-        if submission_key in self.submissions:
+        submissions = self._get_room_submissions(key)
+        if self._find_submission_index(submissions, round_id, gl.message.sender_address) >= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Player already submitted this round")
 
         submission = SubmissionRecord(
@@ -268,20 +274,19 @@ class TruthRaiders(gl.Contract):
             scored_at="",
         )
 
-        self.submissions[submission_key] = submission
-        keys = self.room_submission_keys[key]
-        keys.append(submission_key)
-        self.room_submission_keys[key] = keys
+        submissions.append(submission)
+        self.room_submissions[key] = submissions
         self._append_audit(gl.message.sender_address, "ROUND_SUBMITTED", key, submission.chamber)
 
     @gl.public.write
     def score_round(self, room_id: int, round_id: int, player: Address, prompt: str, rubric_csv: str):
         key = self._room_key(room_id)
-        submission_key = self._submission_key(key, round_id, player)
-        if submission_key not in self.submissions:
+        submissions = self._get_room_submissions(key)
+        submission_index = self._find_submission_index(submissions, round_id, player)
+        if submission_index < 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Submission does not exist")
 
-        submission = self.submissions[submission_key]
+        submission = submissions[submission_index]
         if submission.scored_at != "":
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Submission already scored")
 
@@ -359,12 +364,17 @@ Respond with JSON only:
         submission.accepted = accepted
         submission.reason = clean(str(verdict["reason"]), 240)
         submission.scored_at = gl.message_raw["datetime"]
-        self.submissions[submission_key] = submission
+        submissions[submission_index] = submission
+        self.room_submissions[key] = submissions
 
-        player_key = self._player_key(key, player)
-        player_record = self.player_records[player_key]
+        players = self._get_room_players(key)
+        player_index = self._find_player_index(players, player)
+        if player_index < 0:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Player has not joined")
+        player_record = players[player_index]
         player_record.xp = u256(int(player_record.xp) + xp_award)
-        self.player_records[player_key] = player_record
+        players[player_index] = player_record
+        self.room_players[key] = players
         self._append_audit(gl.message.sender_address, "ROUND_SCORED", key, submission.reason)
 
     @gl.public.write
@@ -399,9 +409,9 @@ Respond with JSON only:
     def get_leaderboard(self, room_id: int) -> list:
         key = self._room_key(room_id)
         result = []
-        for player_address in self.players_by_room[key]:
-            player_key = self._player_key(key, player_address)
-            player = self.player_records[player_key]
+        players = self._get_room_players(key)
+        for index in range(len(players)):
+            player = players[index]
             result.append(
                 {
                     "wallet": format(player.wallet),
@@ -417,10 +427,11 @@ Respond with JSON only:
     @gl.public.view
     def get_submission(self, room_id: int, round_id: int, player: Address) -> dict:
         key = self._room_key(room_id)
-        submission_key = self._submission_key(key, round_id, player)
-        if submission_key not in self.submissions:
+        submissions = self._get_room_submissions(key)
+        submission_index = self._find_submission_index(submissions, round_id, player)
+        if submission_index < 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Submission does not exist")
-        submission = self.submissions[submission_key]
+        submission = submissions[submission_index]
         return {
             "room_id": int(submission.room_id),
             "round_id": int(submission.round_id),

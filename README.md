@@ -47,12 +47,18 @@ The frontend includes:
 Create `.env` from `.env.example` after deploying the contract:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x...
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x5665FdEaBb3f46ddE3dF89467505c493BdF4ed41
 VITE_TRUTH_RAIDERS_ROOM_ID=0
-VITE_GENLAYER_NETWORK=studionet
+VITE_GENLAYER_NETWORK=bradbury
 ```
 
 Supported `VITE_GENLAYER_NETWORK` values are `localnet`, `studionet`, `asimov`, and `bradbury`.
+
+Current Bradbury deployment:
+
+```text
+0x5665FdEaBb3f46ddE3dF89467505c493BdF4ed41
+```
 
 ## Assets
 
