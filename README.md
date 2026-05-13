@@ -38,6 +38,7 @@ This is the mission fit: the fun happens in a multiplayer room, while GenLayer a
 
 Current prototype includes:
 
+- Wallet connect UI for EVM/GenLayer-compatible browser wallets.
 - Weekly raid landing panel.
 - Room code and raid stats.
 - Raider avatar selection.
@@ -47,6 +48,8 @@ Current prototype includes:
 - Answer and evidence submission panel.
 - Local XP preview.
 - Contract packet preview showing what would be sent to GenLayer.
+
+The deployed frontend is playable as a polished prototype. Leaderboard entries besides the connected player are demo raiders, and XP is still locally previewed until a deployed GenLayer contract address is wired into the React app.
 
 ## Assets
 

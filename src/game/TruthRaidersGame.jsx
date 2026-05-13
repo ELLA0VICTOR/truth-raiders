@@ -5,13 +5,19 @@ import { RaidScene } from './RaidScene'
 export default function TruthRaidersGame({ avatarFrame, onReady, onChamber, onProximity }) {
   const mountRef = useRef(null)
   const gameRef = useRef(null)
+  const callbacksRef = useRef({ onReady, onChamber, onProximity })
+
+  useEffect(() => {
+    callbacksRef.current = { onReady, onChamber, onProximity }
+  }, [onReady, onChamber, onProximity])
 
   useEffect(() => {
     if (!mountRef.current || gameRef.current) return undefined
 
-    const handleReady = () => onReady?.()
-    const handleChamber = (event) => onChamber?.(event.detail.chamberIndex)
-    const handleProximity = (event) => onProximity?.(event.detail.chamberId)
+    const mountNode = mountRef.current
+    const handleReady = () => callbacksRef.current.onReady?.()
+    const handleChamber = (event) => callbacksRef.current.onChamber?.(event.detail.chamberIndex)
+    const handleProximity = (event) => callbacksRef.current.onProximity?.(event.detail.chamberId)
 
     window.addEventListener('truthraider:ready', handleReady)
     window.addEventListener('truthraider:chamber', handleChamber)
@@ -19,7 +25,7 @@ export default function TruthRaidersGame({ avatarFrame, onReady, onChamber, onPr
 
     gameRef.current = new Phaser.Game({
       type: Phaser.AUTO,
-      parent: mountRef.current,
+      parent: mountNode,
       width: 640,
       height: 416,
       pixelArt: true,
@@ -47,7 +53,7 @@ export default function TruthRaidersGame({ avatarFrame, onReady, onChamber, onPr
       gameRef.current?.destroy(true)
       gameRef.current = null
     }
-  }, [avatarFrame, onChamber, onProximity, onReady])
+  }, [avatarFrame])
 
   return <div ref={mountRef} className="game-canvas" />
 }

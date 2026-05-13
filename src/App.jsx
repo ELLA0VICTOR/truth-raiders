@@ -1,7 +1,19 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { AVATARS, CHAMBERS, RAID_PLAYERS, RAID_SEASON, scoreLocalSubmission } from './data/raidContent'
 import './App.css'
+
+const TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'play', label: 'Play' },
+  { id: 'leaderboard', label: 'Leaderboard' },
+  { id: 'faq', label: 'FAQ' },
+]
+
+function shortAddress(address) {
+  if (!address) return ''
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
 
 function Sigil({ name = 'mark' }) {
   return (
@@ -41,26 +53,34 @@ function TimerIcon() {
   )
 }
 
-function AvatarToken({ avatar, selected, onClick }) {
+function Nav({ activeTab, onTabChange, walletAddress, onConnect, onDisconnect, isConnecting }) {
   return (
-    <button className={`avatar-token ${selected ? 'is-selected' : ''}`} onClick={onClick} type="button">
-      <span className="avatar-glyph">{avatar.name.slice(0, 2).toUpperCase()}</span>
-      <strong>{avatar.name}</strong>
-      <small>{avatar.role}</small>
-    </button>
-  )
-}
-
-function ChamberCard({ chamber, index, active, completed, onOpen }) {
-  return (
-    <button className={`chamber-card ${active ? 'is-active' : ''} ${completed ? 'is-complete' : ''}`} onClick={onOpen} type="button">
-      <span className="chamber-index">0{index + 1}</span>
-      <div>
-        <strong>{chamber.label}</strong>
-        <p>{chamber.monster}</p>
-      </div>
-      <span className="chamber-state">{completed ? 'scored' : active ? 'open' : 'sealed'}</span>
-    </button>
+    <header className="site-nav">
+      <button className="brand-button" type="button" onClick={() => onTabChange('overview')}>
+        <Sigil name="Truth Raiders seal" />
+        <span>Truth Raiders</span>
+      </button>
+      <nav>
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={activeTab === tab.id ? 'is-active' : ''}
+            type="button"
+            onClick={() => onTabChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <button
+        className={`wallet-button ${walletAddress ? 'is-connected' : ''}`}
+        type="button"
+        onClick={walletAddress ? onDisconnect : onConnect}
+      >
+        <span className="wallet-light" />
+        {walletAddress ? shortAddress(walletAddress) : isConnecting ? 'Connecting...' : 'Connect wallet'}
+      </button>
+    </header>
   )
 }
 
@@ -92,203 +112,135 @@ function Leaderboard({ players, submissions }) {
   )
 }
 
-function ContractPanel({ activeChamber, answer, sourceUrl, submissions }) {
-  const payload = {
-    room_id: RAID_SEASON.roomCode,
-    weekly_seed: RAID_SEASON.code,
-    chamber: activeChamber?.id ?? 'none',
-    answer_preview: answer.trim().slice(0, 96) || 'waiting for player submission',
-    source_url: sourceUrl.trim() || 'optional',
-    scoring_fields: activeChamber?.scoring ?? [],
-  }
-
+function OverviewPage({ onPlay, walletAddress, onConnect }) {
   return (
-    <aside className="contract-panel">
-      <div className="panel-heading">
-        <span>Intelligent Contract Packet</span>
-        <ShieldIcon />
-      </div>
-      <pre>{JSON.stringify(payload, null, 2)}</pre>
-      <div className="democracy-rail">
-        <div>
-          <span>01</span>
-          <p>Leader evaluates answer + evidence.</p>
+    <section className="overview-page page-reveal">
+      <div className="landing-hero">
+        <div className="hero-copy">
+          <span className="kicker">GenLayer community mini-game</span>
+          <h1>Truth Raiders</h1>
+          <p className="hero-lede">
+            A weekly multiplayer dungeon where players defeat corrupted claims, submit evidence, and let GenLayer validators score the run.
+          </p>
+          <div className="hero-actions">
+            <button className="primary-action" type="button" onClick={onPlay}>
+              Enter the raid room
+            </button>
+            {!walletAddress && (
+              <button className="secondary-action" type="button" onClick={onConnect}>
+                Connect first
+              </button>
+            )}
+            <a className="secondary-action" href="#how-it-works">
+              See the loop
+            </a>
+          </div>
+          <div className="mode-chip">
+            <span className="wallet-light" />
+            <b>{walletAddress ? 'Wallet ready' : 'Wallet required for scored runs'}</b>
+            <small>Current build uses local preview data until the deployed contract address is wired.</small>
+          </div>
         </div>
+
+        <button className="try-orb" type="button" onClick={onPlay} aria-label="Open game">
+          <span>Wanna try it out?</span>
+          <Sigil name="hovering raid seal" />
+        </button>
+      </div>
+
+      <div id="how-it-works" className="overview-grid">
+        <article className="feature-card">
+          <TimerIcon />
+          <h2>5-15 minute rooms</h2>
+          <p>Players join a short weekly raid with four levels and a final leaderboard.</p>
+        </article>
+        <article className="feature-card">
+          <ScrollIcon />
+          <h2>Subjective challenges</h2>
+          <p>Claims, evidence, and referee policies are judged by quality, not button spam.</p>
+        </article>
+        <article className="feature-card">
+          <ShieldIcon />
+          <h2>GenLayer referee</h2>
+          <p>Intelligent Contracts score answers and distribute XP through validator agreement.</p>
+        </article>
+      </div>
+
+      <div className="season-banner">
         <div>
-          <span>02</span>
-          <p>Validators rerun the rubric independently.</p>
+          <span className="kicker">{RAID_SEASON.code}</span>
+          <h2>{RAID_SEASON.roomCode}</h2>
         </div>
-        <div>
-          <span>03</span>
-          <p>XP enters weekly leaderboard after consensus.</p>
+        <div className="raid-stats">
+          <span><TimerIcon /> {RAID_SEASON.durationMinutes} min</span>
+          <span><ScrollIcon /> {CHAMBERS.length} levels</span>
+          <span><ShieldIcon /> {RAID_SEASON.xpPool} XP pool</span>
         </div>
       </div>
-      <div className="packet-foot">
-        <span>{submissions.length}/4 chambers submitted</span>
-        <span>Optimistic Democracy referee</span>
-      </div>
-    </aside>
+    </section>
   )
 }
 
-function App() {
-  const [selectedAvatar, setSelectedAvatar] = useState(AVATARS[0])
-  const [raidStarted, setRaidStarted] = useState(false)
-  const [activeChamberIndex, setActiveChamberIndex] = useState(0)
-  const [nearChamber, setNearChamber] = useState(null)
-  const [answer, setAnswer] = useState('')
-  const [sourceUrl, setSourceUrl] = useState('')
-  const [submissions, setSubmissions] = useState([])
-  const [gameReady, setGameReady] = useState(false)
-
+function PlayPage({
+  raidStarted,
+  startRaid,
+  activeChamberIndex,
+  setActiveChamberIndex,
+  nearChamber,
+  setNearChamber,
+  walletAddress,
+  onConnect,
+  walletError,
+  answer,
+  setAnswer,
+  sourceUrl,
+  setSourceUrl,
+  submitChamber,
+  gameReady,
+  setGameReady,
+  currentScore,
+}) {
   const activeChamber = CHAMBERS[activeChamberIndex]
-  const currentScore = scoreLocalSubmission(answer, sourceUrl, activeChamberIndex)
-
-  const players = useMemo(() => {
-    return RAID_PLAYERS.map((player) =>
-      player.id === 'you'
-        ? { ...player, avatar: selectedAvatar.id, status: raidStarted ? 'inside raid' : 'ready' }
-        : player
-    )
-  }, [raidStarted, selectedAvatar.id])
-
-  const completedChambers = new Set(submissions.map((submission) => submission.chamberId))
-
-  function startRaid() {
-    setRaidStarted(true)
-    setActiveChamberIndex(0)
-  }
-
-  function submitChamber() {
-    if (!answer.trim()) return
-
-    const score = currentScore
-    setSubmissions((current) => [
-      ...current.filter((submission) => submission.chamberId !== activeChamber.id || submission.playerId !== 'you'),
-      {
-        playerId: 'you',
-        chamberId: activeChamber.id,
-        answer: answer.trim(),
-        sourceUrl: sourceUrl.trim(),
-        score,
-      },
-    ])
-    setAnswer('')
-    setSourceUrl('')
-    setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
-  }
+  const levelNumber = String(activeChamberIndex + 1).padStart(2, '0')
 
   return (
-    <main className="raid-shell">
-      <section className="hero-panel">
-        <div className="hero-copy">
-          <div className="brand-row">
-            <Sigil name="Truth Raiders seal" />
-            <div>
-              <span className="kicker">GenLayer community mini-game</span>
-              <h1>Truth Raiders</h1>
-            </div>
-          </div>
-          <p className="hero-lede">
-            A 5-15 minute multiplayer dungeon where raiders defeat corrupted claims. Phaser handles the sprite-world;
-            GenLayer judges subjective answers, evidence quality, and XP distribution.
-          </p>
-          <div className="hero-actions">
-            <button className="primary-action" type="button" onClick={startRaid}>
-              {raidStarted ? 'Raid running' : 'Enter weekly raid'}
-            </button>
-            <a className="secondary-action" href="#contract">
-              Read consensus loop
-            </a>
-          </div>
+    <section className="play-page page-reveal">
+      <div className="play-header">
+        <div>
+          <span className="kicker">Level {levelNumber} / {CHAMBERS.length}</span>
+          <h1>The False-Light Catacombs</h1>
         </div>
+        <button className="primary-action" type="button" onClick={startRaid}>
+          {raidStarted ? 'Raid running' : 'Start raid'}
+        </button>
+      </div>
 
-        <div className="raid-card">
-          <span className="kicker">{RAID_SEASON.code}</span>
-          <h2>{RAID_SEASON.roomCode}</h2>
-          <div className="raid-stats">
-            <span><TimerIcon /> {RAID_SEASON.durationMinutes} min</span>
-            <span><ScrollIcon /> {CHAMBERS.length} chambers</span>
-            <span><ShieldIcon /> {RAID_SEASON.xpPool} XP pool</span>
-          </div>
-          <p>Replayable weekly seed. New claims, new evidence traps, new leaderboard.</p>
+      <div className="game-frame game-frame-wide">
+        <div className="game-topbar">
+          <span>{gameReady ? 'raid engine online' : 'loading raid engine'}</span>
+          <span>{nearChamber !== null ? `press space for level 0${nearChamber + 1}` : 'move with WASD / arrows'}</span>
         </div>
-      </section>
+        {raidStarted ? (
+          <TruthRaidersGame
+            avatarFrame={AVATARS[0].frame}
+            onReady={() => setGameReady(true)}
+            onChamber={(index) => setActiveChamberIndex(index)}
+            onProximity={(index) => setNearChamber(index)}
+          />
+        ) : (
+          <div className="sleeping-map">
+            <Sigil name="sealed map" />
+            <strong>Raid map sealed</strong>
+            <p>Start the weekly raid to activate the dungeon.</p>
+          </div>
+        )}
+      </div>
 
-      <section className="setup-grid">
-        <div className="panel">
-          <div className="panel-heading">
-            <span>Choose your raider</span>
-            <span className="fine">sprite identity</span>
-          </div>
-          <div className="avatar-grid">
-            {AVATARS.map((avatar) => (
-              <AvatarToken
-                key={avatar.id}
-                avatar={avatar}
-                selected={avatar.id === selectedAvatar.id}
-                onClick={() => setSelectedAvatar(avatar)}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="panel">
-          <div className="panel-heading">
-            <span>Room roster</span>
-            <span className="fine">multiplayer lobby</span>
-          </div>
-          <Leaderboard players={players} submissions={submissions} />
-        </div>
-      </section>
-
-      <section className="raid-board">
-        <div className="game-frame">
-          <div className="game-topbar">
-            <span>{gameReady ? 'raid engine online' : 'loading raid engine'}</span>
-            <span>{nearChamber !== null ? `near chamber 0${nearChamber + 1}` : 'move with WASD / arrows'}</span>
-          </div>
-          {raidStarted ? (
-            <TruthRaidersGame
-              avatarFrame={selectedAvatar.frame}
-              onReady={() => setGameReady(true)}
-              onChamber={(index) => setActiveChamberIndex(index)}
-              onProximity={(index) => setNearChamber(index)}
-            />
-          ) : (
-            <div className="sleeping-map">
-              <Sigil name="sealed map" />
-              <strong>Raid map sealed</strong>
-              <p>Choose a raider and enter the weekly raid to activate the dungeon.</p>
-            </div>
-          )}
-        </div>
-
-        <div className="panel chamber-panel">
-          <div className="panel-heading">
-            <span>Raid chambers</span>
-            <span className="fine">spacebar near relic to open</span>
-          </div>
-          <div className="chamber-list">
-            {CHAMBERS.map((chamber, index) => (
-              <ChamberCard
-                key={chamber.id}
-                chamber={chamber}
-                index={index}
-                active={index === activeChamberIndex}
-                completed={completedChambers.has(chamber.id)}
-                onOpen={() => setActiveChamberIndex(index)}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="verdict-grid" id="contract">
+      <section className="play-main">
         <div className="panel submission-panel">
           <div className="panel-heading">
-            <span>{activeChamber.label}</span>
-            <span className="fine">{activeChamber.monster}</span>
+            <span>Level {levelNumber}</span>
+            <span className="fine">{activeChamber.label}</span>
           </div>
           <h2>{activeChamber.title}</h2>
           <p className="prompt">{activeChamber.prompt}</p>
@@ -317,13 +269,231 @@ function App() {
             <strong>{currentScore} XP</strong>
           </div>
 
-          <button className="primary-action wide" type="button" onClick={submitChamber} disabled={!answer.trim()}>
-            Seal answer for GenLayer judging
+          {!walletAddress && (
+            <div className="wallet-gate">
+              <strong>Wallet needed for scored submissions</strong>
+              <p>Connect before sealing answers so XP can belong to a player address.</p>
+              <button className="secondary-action" type="button" onClick={onConnect}>
+                Connect wallet
+              </button>
+              {walletError && <small>{walletError}</small>}
+            </div>
+          )}
+
+          <button className="primary-action wide" type="button" onClick={submitChamber} disabled={!answer.trim() || !walletAddress}>
+            {walletAddress ? 'Seal answer for GenLayer judging' : 'Connect wallet to seal answer'}
           </button>
         </div>
 
-        <ContractPanel activeChamber={activeChamber} answer={answer} sourceUrl={sourceUrl} submissions={submissions} />
+        <div className="panel how-to-play">
+          <div className="panel-heading">
+            <span>How to play</span>
+            <span className="fine">{CHAMBERS.length} levels</span>
+          </div>
+          <div className="rule-row">
+            <span>01</span>
+            <p>Click Start raid, then move with WASD or arrow keys.</p>
+          </div>
+          <div className="rule-row">
+            <span>02</span>
+            <p>Walk near a glowing level marker and press Space to load that challenge.</p>
+          </div>
+          <div className="rule-row">
+            <span>03</span>
+            <p>Answer the prompt, add an evidence URL if you have one, then submit for scoring.</p>
+          </div>
+          <div className="rule-row">
+            <span>04</span>
+            <p>Finish all levels to climb the weekly XP leaderboard.</p>
+          </div>
+        </div>
       </section>
+    </section>
+  )
+}
+
+function LeaderboardPage({ players, submissions }) {
+  return (
+    <section className="leaderboard-page page-reveal">
+      <div className="page-title">
+        <span className="kicker">Weekly XP distribution</span>
+        <h1>Leaderboard</h1>
+        <p>Demo squad plus your local submissions now; contract-backed XP after deployment.</p>
+      </div>
+      <div className="leaderboard-shell">
+        <Leaderboard players={players} submissions={submissions} />
+        <div className="panel">
+          <div className="panel-heading">
+            <span>Prize logic</span>
+            <span className="fine">after consensus</span>
+          </div>
+          <div className="prize-grid">
+            <div><b>1st</b><span>40% XP pool</span></div>
+            <div><b>2nd</b><span>25% XP pool</span></div>
+            <div><b>3rd</b><span>15% XP pool</span></div>
+            <div><b>Raiders</b><span>participation XP</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function FaqPage() {
+  const faqs = [
+    ['Is this multiplayer?', 'Yes. The MVP shows a room roster and shared raid structure; the next layer adds realtime room presence while GenLayer remains the scoring authority.'],
+    ['Why GenLayer?', 'The game needs subjective judging: answer quality, evidence strength, safety, and XP fairness. That is where Intelligent Contracts and Optimistic Democracy fit.'],
+    ['How long is a match?', 'The intended community format is 5-15 minutes with four short chambers and one final leaderboard reveal.'],
+    ['Can it replay weekly?', 'Yes. Each week can use a new raid seed, new claims, new evidence tasks, and a fresh XP leaderboard.'],
+  ]
+
+  return (
+    <section className="faq-page page-reveal">
+      <div className="page-title">
+        <span className="kicker">Raid manual</span>
+        <h1>FAQ</h1>
+      </div>
+      <div className="faq-list">
+        {faqs.map(([question, answer]) => (
+          <article className="faq-card" key={question}>
+            <h2>{question}</h2>
+            <p>{answer}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState('overview')
+  const [walletAddress, setWalletAddress] = useState('')
+  const [walletError, setWalletError] = useState('')
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [raidStarted, setRaidStarted] = useState(false)
+  const [activeChamberIndex, setActiveChamberIndex] = useState(0)
+  const [nearChamber, setNearChamber] = useState(null)
+  const [answer, setAnswer] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [submissions, setSubmissions] = useState([])
+  const [gameReady, setGameReady] = useState(false)
+
+  const activeChamber = CHAMBERS[activeChamberIndex]
+  const currentScore = scoreLocalSubmission(answer, sourceUrl, activeChamberIndex)
+
+  useEffect(() => {
+    if (!window.ethereum) return undefined
+
+    window.ethereum
+      .request({ method: 'eth_accounts' })
+      .then((accounts) => setWalletAddress(accounts?.[0] ?? ''))
+      .catch(() => undefined)
+
+    function handleAccountsChanged(accounts) {
+      setWalletAddress(accounts?.[0] ?? '')
+      setWalletError('')
+    }
+
+    window.ethereum.on?.('accountsChanged', handleAccountsChanged)
+    return () => window.ethereum.removeListener?.('accountsChanged', handleAccountsChanged)
+  }, [])
+
+  const players = useMemo(() => {
+    return RAID_PLAYERS.map((player) =>
+      player.id === 'you'
+        ? {
+            ...player,
+            name: walletAddress ? shortAddress(walletAddress) : 'You',
+            status: walletAddress ? (raidStarted ? 'inside raid' : 'wallet ready') : 'connect wallet',
+          }
+        : player
+    )
+  }, [raidStarted, walletAddress])
+
+  function startRaid() {
+    setRaidStarted(true)
+    setActiveTab('play')
+    setActiveChamberIndex(0)
+  }
+
+  async function connectWallet() {
+    setWalletError('')
+
+    if (!window.ethereum) {
+      setWalletError('No EVM wallet was detected in this browser.')
+      return
+    }
+
+    setIsConnecting(true)
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      setWalletAddress(accounts?.[0] ?? '')
+    } catch (error) {
+      setWalletError(error?.message || 'Wallet connection was rejected.')
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  function disconnectWallet() {
+    setWalletAddress('')
+    setWalletError('')
+  }
+
+  function submitChamber() {
+    if (!answer.trim() || !walletAddress) return
+
+    const score = currentScore
+    setSubmissions((current) => [
+      ...current.filter((submission) => submission.chamberId !== activeChamber.id || submission.playerId !== 'you'),
+      {
+        playerId: 'you',
+        chamberId: activeChamber.id,
+        answer: answer.trim(),
+        sourceUrl: sourceUrl.trim(),
+        score,
+      },
+    ])
+    setAnswer('')
+    setSourceUrl('')
+    setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
+  }
+
+  return (
+    <main className="raid-shell">
+      <Nav
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        walletAddress={walletAddress}
+        onConnect={connectWallet}
+        onDisconnect={disconnectWallet}
+        isConnecting={isConnecting}
+      />
+
+      {activeTab === 'overview' && <OverviewPage onPlay={startRaid} walletAddress={walletAddress} onConnect={connectWallet} />}
+      {activeTab === 'play' && (
+        <PlayPage
+          raidStarted={raidStarted}
+          startRaid={startRaid}
+          activeChamberIndex={activeChamberIndex}
+          setActiveChamberIndex={setActiveChamberIndex}
+          nearChamber={nearChamber}
+          setNearChamber={setNearChamber}
+          walletAddress={walletAddress}
+          onConnect={connectWallet}
+          walletError={walletError}
+          answer={answer}
+          setAnswer={setAnswer}
+          sourceUrl={sourceUrl}
+          setSourceUrl={setSourceUrl}
+          submitChamber={submitChamber}
+          gameReady={gameReady}
+          setGameReady={setGameReady}
+          currentScore={currentScore}
+        />
+      )}
+      {activeTab === 'leaderboard' && <LeaderboardPage players={players} submissions={submissions} />}
+      {activeTab === 'faq' && <FaqPage />}
     </main>
   )
 }

@@ -71,6 +71,17 @@ export class RaidScene extends Phaser.Scene {
     })
 
     this.input.keyboard.on('keydown-SPACE', () => this.tryInteract())
+    this.interactionHint = this.add.text(MAP_WIDTH * TILE / 2, MAP_HEIGHT * TILE - 22, 'PRESS SPACE', {
+      fontFamily: 'Cascadia Code, monospace',
+      fontSize: '11px',
+      color: '#f0d57a',
+      backgroundColor: '#070907',
+      padding: { x: 10, y: 5 },
+    })
+    this.interactionHint.setOrigin(0.5)
+    this.interactionHint.setDepth(30)
+    this.interactionHint.setAlpha(0)
+
     emitGameEvent('ready')
   }
 
@@ -122,7 +133,7 @@ export class RaidScene extends Phaser.Scene {
         ease: 'Sine.easeInOut',
       })
 
-      const label = this.add.text(x, y + 33, `CHAMBER ${point.id + 1}`, {
+      const label = this.add.text(x, y + 33, `LEVEL ${point.id + 1}`, {
         fontFamily: 'Cascadia Code, monospace',
         fontSize: '9px',
         color: '#8b8161',
@@ -159,6 +170,13 @@ export class RaidScene extends Phaser.Scene {
       if (near) this.nearestChamber = chamber
     }
 
+    if (this.nearestChamber) {
+      this.interactionHint.setText(`PRESS SPACE: LEVEL ${this.nearestChamber.id + 1}`)
+      this.interactionHint.setAlpha(1)
+    } else {
+      this.interactionHint.setAlpha(0)
+    }
+
     emitGameEvent('proximity', {
       chamberId: this.nearestChamber?.id ?? null,
     })
@@ -166,6 +184,13 @@ export class RaidScene extends Phaser.Scene {
 
   tryInteract() {
     if (!this.nearestChamber) return
+    this.tweens.add({
+      targets: this.nearestChamber.relic,
+      scale: 3.2,
+      duration: 90,
+      yoyo: true,
+      ease: 'Sine.easeOut',
+    })
     emitGameEvent('chamber', {
       chamberIndex: this.nearestChamber.id,
     })

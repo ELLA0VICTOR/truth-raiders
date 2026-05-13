@@ -27,7 +27,6 @@ export const CHAMBERS = [
     prompt:
       'A corrupted oracle says: "Optimistic Democracy means validators blindly accept the leader output." Explain why this is wrong.',
     instruction: 'Submit a short correction and optional source URL.',
-    monster: 'False-light Wisp',
     scoring: ['accuracy', 'source quality', 'clarity', 'no hallucination'],
   },
   {
@@ -37,7 +36,6 @@ export const CHAMBERS = [
     prompt:
       'The raid requires proof that GenLayer Intelligent Contracts can read web evidence and use AI-assisted consensus. Provide the best public source and summarize it.',
     instruction: 'A raw documentation URL or official source works best.',
-    monster: 'Citation Mimic',
     scoring: ['source relevance', 'public accessibility', 'summary quality', 'scope match'],
   },
   {
@@ -47,7 +45,6 @@ export const CHAMBERS = [
     prompt:
       'A validator spirit blocks the exit and asks for a safe policy: when should a subjective game result be rejected instead of scored?',
     instruction: 'Answer as a game referee, not as a lawyer.',
-    monster: 'Ambiguity Knight',
     scoring: ['policy strength', 'fairness', 'specificity', 'community safety'],
   },
   {
@@ -57,7 +54,6 @@ export const CHAMBERS = [
     prompt:
       'Final boss: write the best one-paragraph verdict explaining who deserves XP in a subjective mini-game and why validators should agree.',
     instruction: 'Be concise. Reward evidence, teamwork, and correctness.',
-    monster: 'Hallucination Hydra',
     scoring: ['reasoning', 'consensus likelihood', 'XP fairness', 'style'],
   },
 ]
