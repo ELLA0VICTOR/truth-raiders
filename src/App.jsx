@@ -42,12 +42,15 @@ function buildRoomUrl(roomId) {
 }
 
 function shortAddress(address) {
-  if (!address) return ''
-  return `${address.slice(0, 6)}...${address.slice(-4)}`
+  const normalized = normalizeWallet(address)
+  if (!normalized) return ''
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`
 }
 
 function normalizeWallet(value) {
-  return String(value || '').replace(/^Address\("(.+)"\)$/, '$1').toLowerCase()
+  const text = String(value || '')
+  const match = text.match(/0x[a-fA-F0-9]{40}/)
+  return (match?.[0] || text).toLowerCase()
 }
 
 function sleep(ms) {
