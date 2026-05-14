@@ -424,6 +424,28 @@ h1 {
   gap: 10px;
 }
 
+.join-hint {
+  grid-column: 1 / -1;
+  color: var(--gold) !important;
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.join-error {
+  grid-column: 1 / -1;
+  color: #f08d72 !important;
+  font-family: var(--mono);
+}
+
+.submit-hint {
+  display: block;
+  margin-top: 10px;
+  color: var(--gold);
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+}
+
 .game-frame-wide {
   border: 0;
   background: transparent;
@@ -441,6 +463,17 @@ h1 {
 .game-frame-wide .game-canvas,
 .game-frame-wide .sleeping-map {
   min-height: 0;
+}
+
+.level-notice {
+  width: min(100%, 1080px, calc((100vh - 220px) * 1.538));
+  margin: 0 auto 10px;
+  border: 1px solid rgba(201, 181, 107, 0.44);
+  background: rgba(10, 12, 8, 0.92);
+  color: var(--gold);
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  padding: 10px 12px;
 }
 
 .play-main {

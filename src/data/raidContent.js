@@ -148,29 +148,21 @@ export const CHAMBERS = [
 
 export function getReadiness(answer, selectedEvidenceUrl, chamber) {
   if (!chamber) {
-    return { ready: false, completed: 0, required: 4, label: 'Open a level first' }
+    return { ready: false, completed: 0, required: 3, label: 'Open a level first' }
   }
 
-  const lowered = answer.toLowerCase()
-  const completedTasks = chamber.tasks.filter((task) => {
-    const keywords = task
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, '')
-      .split(' ')
-      .filter((word) => word.length > 5)
-    return keywords.some((keyword) => lowered.includes(keyword.slice(0, 7)))
-  }).length
-
   const hasEvidence = Boolean(selectedEvidenceUrl)
-  const hasEnoughText = answer.trim().split(/\s+/).filter(Boolean).length >= 45
-  const completed = completedTasks + (hasEvidence ? 1 : 0) + (hasEnoughText ? 1 : 0)
-  const required = chamber.tasks.length + 2
-  const ready = hasEvidence && hasEnoughText && completedTasks >= Math.min(2, chamber.tasks.length)
+  const wordCount = answer.trim().split(/\s+/).filter(Boolean).length
+  const hasEnoughText = wordCount >= 18
+  const mentionsGameConcept = /genlayer|validator|consensus|evidence|source|score|xp|leader/i.test(answer)
+  const completed = (hasEvidence ? 1 : 0) + (hasEnoughText ? 1 : 0) + (mentionsGameConcept ? 1 : 0)
+  const required = 3
+  const ready = hasEvidence && hasEnoughText
 
   return {
     ready,
     completed,
     required,
-    label: ready ? 'Ready for GenLayer judging' : 'Needs stronger answer',
+    label: ready ? 'Ready for GenLayer judging' : `Need evidence and at least 18 words (${wordCount}/18)`,
   }
 }

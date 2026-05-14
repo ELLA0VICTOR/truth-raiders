@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
 import { AVATARS, CHAMBERS, RAID_SEASON, getReadiness } from './data/raidContent'
+import { switchToBradbury } from './config/genlayer'
 import './App.css'
 
 const TABS = [
@@ -14,6 +15,10 @@ const TABS = [
 function shortAddress(address) {
   if (!address) return ''
   return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function normalizeWallet(value) {
+  return String(value || '').replace(/^Address\("(.+)"\)$/, '$1').toLowerCase()
 }
 
 function Sigil({ name = 'mark' }) {
@@ -227,6 +232,8 @@ function PlayPage({
   openLevel,
   nearChamber,
   setNearChamber,
+  unlockedLevelIndex,
+  levelNotice,
   walletAddress,
   onConnect,
   walletError,
@@ -234,7 +241,6 @@ function PlayPage({
   handle,
   setHandle,
   roomCreated,
-  createRoom,
   roomJoined,
   joinRoom,
   answer,
@@ -248,6 +254,34 @@ function PlayPage({
 }) {
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
+  const joinDisabledReason = !contract.configured
+    ? 'Contract is not configured.'
+    : !walletAddress
+      ? 'Connect a wallet first.'
+      : !roomCreated
+        ? 'Waiting for the deployed room to load.'
+        : roomJoined
+          ? 'This wallet has already joined.'
+          : !handle.trim()
+            ? 'Enter a raider handle first.'
+            : contract.isLoading
+              ? 'Transaction in progress.'
+              : ''
+  const canJoinRoom = joinDisabledReason === ''
+  const submitDisabledReason = !contract.configured
+    ? 'Contract is not configured.'
+    : !walletAddress
+      ? 'Connect a wallet first.'
+      : !roomJoined
+        ? 'Join the room first.'
+        : !activeChamber
+          ? 'Open a level first.'
+          : !readiness.ready
+            ? readiness.label
+            : contract.isLoading
+              ? 'Transaction in progress.'
+              : ''
+  const canSubmit = submitDisabledReason === ''
 
   return (
     <section className="play-page page-reveal">
@@ -264,7 +298,15 @@ function PlayPage({
       <div className="room-console">
         <div>
           <span className="kicker">Room {RAID_SEASON.roomCode}</span>
-          <strong>{roomJoined ? 'Joined and ready' : contract.configured ? 'Join before submitting' : 'Deploy contract to join on-chain'}</strong>
+          <strong>
+            {roomJoined
+              ? 'Joined and ready'
+              : contract.configured
+                ? roomCreated
+                  ? 'Room live - join to submit'
+                  : 'Room not found on-chain'
+                : 'Deploy contract to join on-chain'}
+          </strong>
           {contract.configured ? (
             <small>Contract room #{contract.roomId}</small>
           ) : (
@@ -281,20 +323,29 @@ function PlayPage({
           />
         </label>
         <div className="room-actions">
-          <button className="secondary-action" type="button" onClick={createRoom} disabled={!walletAddress || roomCreated || !contract.configured || contract.isLoading}>
-            {roomCreated ? 'Room created' : 'Create room'}
+          <button className="secondary-action" type="button" disabled>
+            {roomCreated ? 'Room live' : 'Waiting for room'}
           </button>
-          <button className="secondary-action" type="button" onClick={joinRoom} disabled={!walletAddress || !handle.trim() || roomJoined || !roomCreated || !contract.configured || contract.isLoading}>
+          <button className="secondary-action" type="button" onClick={joinRoom} disabled={!canJoinRoom} title={joinDisabledReason || 'Join this room'}>
             {roomJoined ? 'Room joined' : contract.isLoading ? 'Working...' : 'Join room'}
           </button>
         </div>
+        {joinDisabledReason && <small className="join-hint">{joinDisabledReason}</small>}
+        {contract.error && <small className="join-error">{contract.error}</small>}
       </div>
 
       <div className="game-frame game-frame-wide">
         <div className="game-topbar">
           <span>{gameReady ? 'raid engine online' : 'loading raid engine'}</span>
-          <span>{nearChamber !== null ? `press space for level 0${nearChamber + 1}` : 'move with WASD / arrows'}</span>
+          <span>
+            {nearChamber !== null
+              ? nearChamber <= unlockedLevelIndex
+                ? `press space for level 0${nearChamber + 1}`
+                : `level 0${nearChamber + 1} locked`
+              : 'move with WASD / arrows'}
+          </span>
         </div>
+        {levelNotice && <div className="level-notice">{levelNotice}</div>}
         {raidStarted ? (
           <TruthRaidersGame
             avatarFrame={AVATARS[0].frame}
@@ -384,10 +435,12 @@ function PlayPage({
                 className="primary-action wide"
                 type="button"
                 onClick={submitChamber}
-                disabled={!walletAddress || !roomJoined || !readiness.ready || !contract.configured || contract.isLoading}
+                disabled={!canSubmit}
+                title={submitDisabledReason || 'Submit to GenLayer judging'}
               >
                 {contract.isLoading ? 'Submitting...' : walletAddress ? 'Submit to GenLayer judging' : 'Connect wallet to submit'}
               </button>
+              {submitDisabledReason && <small className="submit-hint">{submitDisabledReason}</small>}
               {contract.error && <p className="contract-error">{contract.error}</p>}
             </>
           ) : (
@@ -499,9 +552,13 @@ function App() {
   const [selectedEvidenceUrl, setSelectedEvidenceUrl] = useState('')
   const [submissions, setSubmissions] = useState([])
   const [gameReady, setGameReady] = useState(false)
+  const [levelNotice, setLevelNotice] = useState('')
 
   const contract = useTruthRaidersContract(walletAddress)
-  const { configured: contractConfigured, getRoom } = contract
+  const { configured: contractConfigured, getRoom, getLeaderboard } = contract
+  const completedLevelIds = useMemo(() => new Set(submissions.filter((submission) => submission.wallet === walletAddress).map((submission) => submission.chamberId)), [submissions, walletAddress])
+  const nextLevelIndex = CHAMBERS.findIndex((chamber) => !completedLevelIds.has(chamber.id))
+  const unlockedLevelIndex = nextLevelIndex === -1 ? CHAMBERS.length - 1 : nextLevelIndex
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
   const readiness = getReadiness(answer, selectedEvidenceUrl, activeChamber)
 
@@ -523,7 +580,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!contractConfigured || !walletAddress) return undefined
+    if (!contractConfigured) return undefined
 
     let cancelled = false
     getRoom()
@@ -537,19 +594,46 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [contractConfigured, getRoom, walletAddress])
+  }, [contractConfigured, getRoom])
+
+  useEffect(() => {
+    if (!contractConfigured || !walletAddress) return undefined
+
+    let cancelled = false
+    getLeaderboard()
+      .then((players) => {
+        if (cancelled || !Array.isArray(players)) return
+        const joined = players.some((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress))
+        setRoomJoined(joined)
+      })
+      .catch(() => {
+        if (!cancelled) setRoomJoined(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [contractConfigured, getLeaderboard, walletAddress])
 
   function startRaid() {
     setRaidStarted(true)
     setActiveTab('play')
     setActiveChamberIndex(0)
     setOpenedLevelIndex(null)
+    setLevelNotice('')
     setAnswer('')
     setSelectedEvidenceUrl('')
   }
 
   function openLevel(index) {
+    if (index > unlockedLevelIndex) {
+      setLevelNotice(`Level ${index + 1} is locked. Finish level ${unlockedLevelIndex + 1} first.`)
+      window.setTimeout(() => setLevelNotice(''), 2800)
+      return
+    }
+
     const chamber = CHAMBERS[index]
+    setLevelNotice('')
     setActiveChamberIndex(index)
     setOpenedLevelIndex(index)
     setAnswer('')
@@ -557,16 +641,6 @@ function App() {
     window.setTimeout(() => {
       document.querySelector('.submission-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 80)
-  }
-
-  async function createRoom() {
-    if (!walletAddress || !contract.configured) return
-    try {
-      await contract.createRoom()
-      setRoomCreated(true)
-    } catch {
-      setRoomCreated(false)
-    }
   }
 
   async function joinRoom() {
@@ -589,6 +663,7 @@ function App() {
 
     setIsConnecting(true)
     try {
+      await switchToBradbury(window.ethereum)
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
       setWalletAddress(accounts?.[0] ?? '')
     } catch (error) {
@@ -640,6 +715,7 @@ function App() {
     setSelectedEvidenceUrl('')
     setOpenedLevelIndex(null)
     setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
+    setLevelNotice(`Level ${openedLevelIndex + 1} cleared. Level ${Math.min(CHAMBERS.length, openedLevelIndex + 2)} unlocked.`)
   }
 
   return (
@@ -662,6 +738,8 @@ function App() {
           openLevel={openLevel}
           nearChamber={nearChamber}
           setNearChamber={setNearChamber}
+          unlockedLevelIndex={unlockedLevelIndex}
+          levelNotice={levelNotice}
           walletAddress={walletAddress}
           onConnect={connectWallet}
           walletError={walletError}
@@ -669,7 +747,6 @@ function App() {
           handle={handle}
           setHandle={setHandle}
           roomCreated={roomCreated}
-          createRoom={createRoom}
           roomJoined={roomJoined}
           joinRoom={joinRoom}
           answer={answer}
