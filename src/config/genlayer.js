@@ -1,11 +1,11 @@
 import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
 
-const DEFAULT_BRADBURY_CONTRACT = '0xfaFB51f5Ff15F61BAC4CcDD424eB90463456bf28'
+const DEFAULT_STUDIO_CONTRACT = '0x23Ccc74B74388e1e6c9665dE7776A761B25521b8'
 
-export const CONTRACT_ADDRESS = import.meta.env.VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS || DEFAULT_BRADBURY_CONTRACT
+export const CONTRACT_ADDRESS = import.meta.env.VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS || DEFAULT_STUDIO_CONTRACT
 export const ROOM_ID = Number(import.meta.env.VITE_TRUTH_RAIDERS_ROOM_ID || 0)
-export const GENLAYER_NETWORK = import.meta.env.VITE_GENLAYER_NETWORK || 'bradbury'
-export const GENLAYER_RPC_URL = import.meta.env.VITE_GENLAYER_RPC_URL || 'https://rpc-bradbury.genlayer.com'
+export const GENLAYER_NETWORK = import.meta.env.VITE_GENLAYER_NETWORK || 'studionet'
+export const GENLAYER_RPC_URL = import.meta.env.VITE_GENLAYER_RPC_URL || (GENLAYER_NETWORK === 'bradbury' ? 'https://rpc-bradbury.genlayer.com' : 'https://studio.genlayer.com/api')
 export const BRADBURY_CHAIN_ID_HEX = '0x107d'
 
 export const BRADBURY_CHAIN_PARAMS = {
@@ -33,7 +33,8 @@ export function isContractConfigured() {
   return /^0x[a-fA-F0-9]{40}$/.test(CONTRACT_ADDRESS)
 }
 
-export async function switchToBradbury(provider) {
+export async function ensureGenLayerNetwork(provider) {
+  if (GENLAYER_NETWORK !== 'bradbury') return
   if (!provider?.request) return
 
   try {

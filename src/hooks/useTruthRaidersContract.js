@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { createClient } from 'genlayer-js'
 import { ExecutionResult, TransactionStatus } from 'genlayer-js/types'
-import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_RPC_URL, ROOM_ID, isContractConfigured, switchToBradbury } from '../config/genlayer'
+import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_RPC_URL, ROOM_ID, ensureGenLayerNetwork, isContractConfigured } from '../config/genlayer'
 
 export function useTruthRaidersContract(walletAddress) {
   const [isLoading, setIsLoading] = useState(false)
@@ -37,7 +37,7 @@ export function useTruthRaidersContract(walletAddress) {
       setError('')
       try {
         if (window.ethereum) {
-          await switchToBradbury(window.ethereum)
+          await ensureGenLayerNetwork(window.ethereum)
         }
 
         const hash = await writeClient.writeContract({

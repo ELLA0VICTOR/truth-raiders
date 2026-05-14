@@ -158,8 +158,8 @@ class TruthRaiders(gl.Contract):
     next_room_id: u256
     admin: Address
 
-    def __init__(self, admin: Address):
-        self.admin = admin
+    def __init__(self):
+        self.admin = gl.message.sender_address
         self.audit_log = []
         self.next_room_id = u256(0)
 

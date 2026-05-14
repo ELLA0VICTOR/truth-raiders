@@ -1010,6 +1010,18 @@ input:focus {
   color: var(--parchment-dim);
 }
 
+.judging-status {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--amber) 42%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  color: var(--parchment);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .rulebook {
   display: grid;
   align-content: start;

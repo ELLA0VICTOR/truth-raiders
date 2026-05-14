@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
 import { AVATARS, CHAMBERS, RAID_SEASON, getReadiness } from './data/raidContent'
-import { switchToBradbury } from './config/genlayer'
+import { ensureGenLayerNetwork } from './config/genlayer'
 import './App.css'
 
 const TABS = [
@@ -124,20 +124,18 @@ function ArtifactPanel({ artifact }) {
   )
 }
 
-function Leaderboard({ walletAddress, handle, submissions }) {
+function Leaderboard({ players }) {
   const ranked = useMemo(() => {
-    if (!walletAddress || submissions.length === 0) return []
-
-    const completed = submissions.filter((submission) => submission.wallet === walletAddress)
-    return [
-      {
-        id: walletAddress,
-        name: handle || shortAddress(walletAddress),
-        status: `${completed.length}/${CHAMBERS.length} packets locked`,
-        xp: 'pending',
-      },
-    ]
-  }, [handle, submissions, walletAddress])
+    if (!Array.isArray(players)) return []
+    return players
+      .map((player) => ({
+        id: normalizeWallet(player.wallet),
+        name: player.handle || shortAddress(normalizeWallet(player.wallet)),
+        status: `${shortAddress(normalizeWallet(player.wallet))} / on-chain XP`,
+        xp: Number(player.xp || 0),
+      }))
+      .sort((left, right) => right.xp - left.xp)
+  }, [players])
 
   return (
     <div className="leaderboard">
@@ -149,13 +147,13 @@ function Leaderboard({ walletAddress, handle, submissions }) {
               <strong>{player.name}</strong>
               <small>{player.status}</small>
             </div>
-            <b>{player.xp === 'pending' ? 'XP pending' : `${player.xp} XP`}</b>
+            <b>{player.xp} XP</b>
           </div>
         ))
       ) : (
         <div className="empty-state">
           <strong>No finalized raiders yet</strong>
-          <p>Leaderboard entries appear after a wallet submits level packets and GenLayer scoring is wired to the deployed contract.</p>
+          <p>Leaderboard entries appear after wallets join the room and GenLayer scoring writes XP on-chain.</p>
         </div>
       )}
     </div>
@@ -248,12 +246,14 @@ function PlayPage({
   setHandle,
   roomCreated,
   roomJoined,
+  chainSyncStatus,
   joinRoom,
   answer,
   setAnswer,
   selectedEvidenceUrl,
   setSelectedEvidenceUrl,
   submitChamber,
+  judgingStatus,
   gameReady,
   setGameReady,
   readiness,
@@ -264,15 +264,17 @@ function PlayPage({
     ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
+      : roomJoined
+        ? 'This wallet is already joined from on-chain state.'
+      : chainSyncStatus !== 'ready'
+        ? 'Syncing room and player state from Bradbury...'
       : !roomCreated
-        ? 'Waiting for the deployed room to load.'
-        : roomJoined
-          ? 'This wallet has already joined.'
-          : !handle.trim()
-            ? 'Enter a raider handle first.'
-            : contract.isLoading
-              ? 'Transaction in progress.'
-              : ''
+        ? 'Room was not found on the deployed contract.'
+        : !handle.trim()
+          ? 'Enter a raider handle first.'
+          : contract.isLoading
+            ? 'Transaction in progress.'
+            : ''
   const canJoinRoom = joinDisabledReason === ''
   const submitDisabledReason = !contract.configured
     ? 'Contract is not configured.'
@@ -310,7 +312,9 @@ function PlayPage({
               : contract.configured
                 ? roomCreated
                   ? 'Room live - join to submit'
-                  : 'Room not found on-chain'
+                  : chainSyncStatus === 'ready'
+                    ? 'Room not found on-chain'
+                    : 'Syncing room from Bradbury'
                 : 'Deploy contract to join on-chain'}
           </strong>
           {contract.configured ? (
@@ -444,8 +448,9 @@ function PlayPage({
                 disabled={!canSubmit}
                 title={submitDisabledReason || 'Submit to GenLayer judging'}
               >
-                {contract.isLoading ? 'Submitting...' : walletAddress ? 'Submit to GenLayer judging' : 'Connect wallet to submit'}
+                {contract.isLoading ? 'Working on-chain...' : walletAddress ? 'Submit / run judging' : 'Connect wallet to submit'}
               </button>
+              {judgingStatus && <p className="judging-status">{judgingStatus}</p>}
               {submitDisabledReason && <small className="submit-hint">{submitDisabledReason}</small>}
               {contract.error && <p className="contract-error">{contract.error}</p>}
             </>
@@ -489,7 +494,7 @@ function PlayPage({
   )
 }
 
-function LeaderboardPage({ walletAddress, handle, submissions }) {
+function LeaderboardPage({ leaderboardPlayers }) {
   return (
     <section className="leaderboard-page page-reveal">
       <div className="page-title">
@@ -498,7 +503,7 @@ function LeaderboardPage({ walletAddress, handle, submissions }) {
         <p>No fake raiders. Final XP appears after GenLayer validator scoring finalizes submitted packets.</p>
       </div>
       <div className="leaderboard-shell">
-        <Leaderboard walletAddress={walletAddress} handle={handle} submissions={submissions} />
+        <Leaderboard players={leaderboardPlayers} />
         <div className="panel">
           <div className="panel-heading">
             <span>Prize logic</span>
@@ -559,10 +564,35 @@ function App() {
   const [submissions, setSubmissions] = useState([])
   const [gameReady, setGameReady] = useState(false)
   const [levelNotice, setLevelNotice] = useState('')
+  const [judgingStatus, setJudgingStatus] = useState('')
+  const [leaderboardPlayers, setLeaderboardPlayers] = useState([])
+  const [progressRefreshKey, setProgressRefreshKey] = useState(0)
+  const [chainSyncStatus, setChainSyncStatus] = useState('idle')
+  const [pendingJudgingKeys, setPendingJudgingKeys] = useState([])
 
   const contract = useTruthRaidersContract(walletAddress)
-  const { configured: contractConfigured, getRoom, getLeaderboard } = contract
-  const completedLevelIds = useMemo(() => new Set(submissions.filter((submission) => submission.wallet === walletAddress).map((submission) => submission.chamberId)), [submissions, walletAddress])
+  const { configured: contractConfigured, getRoom, getLeaderboard, getSubmission } = contract
+  const connectedPlayer = useMemo(
+    () => leaderboardPlayers.find((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress)),
+    [leaderboardPlayers, walletAddress]
+  )
+  const isJoined = roomJoined || Boolean(connectedPlayer)
+  const completedLevelIds = useMemo(
+    () => {
+      const completed = new Set(
+      submissions
+        .filter((submission) => normalizeWallet(submission.wallet) === normalizeWallet(walletAddress) && submission.status === 'scored')
+        .map((submission) => submission.chamberId)
+      )
+
+      if (Number(connectedPlayer?.xp || 0) > 0) {
+        completed.add(CHAMBERS[0].id)
+      }
+
+      return completed
+    },
+    [connectedPlayer, submissions, walletAddress]
+  )
   const nextLevelIndex = CHAMBERS.findIndex((chamber) => !completedLevelIds.has(chamber.id))
   const unlockedLevelIndex = nextLevelIndex === -1 ? CHAMBERS.length - 1 : nextLevelIndex
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
@@ -589,37 +619,114 @@ function App() {
     if (!contractConfigured) return undefined
 
     let cancelled = false
-    getRoom()
-      .then(() => {
-        if (!cancelled) setRoomCreated(true)
-      })
-      .catch(() => {
-        if (!cancelled) setRoomCreated(false)
-      })
+
+    async function syncContractState() {
+      if (cancelled) return
+      setChainSyncStatus((status) => (status === 'ready' ? 'ready' : 'syncing'))
+
+      const [roomResult, leaderboardResult] = await Promise.allSettled([
+        getRoom(),
+        getLeaderboard(),
+      ])
+
+      if (cancelled) return
+
+      if (roomResult.status === 'fulfilled') {
+        setRoomCreated(true)
+      }
+
+      if (leaderboardResult.status === 'fulfilled' && Array.isArray(leaderboardResult.value)) {
+        setRoomCreated(true)
+        setLeaderboardPlayers(leaderboardResult.value)
+      }
+
+      if (roomResult.status === 'fulfilled' || leaderboardResult.status === 'fulfilled') {
+        setChainSyncStatus('ready')
+      } else {
+        setChainSyncStatus((status) => (status === 'ready' ? 'ready' : 'syncing'))
+      }
+    }
+
+    syncContractState()
+    const interval = window.setInterval(syncContractState, 8000)
 
     return () => {
       cancelled = true
+      window.clearInterval(interval)
     }
-  }, [contractConfigured, getRoom])
+  }, [contractConfigured, getLeaderboard, getRoom])
 
   useEffect(() => {
-    if (!contractConfigured || !walletAddress) return undefined
+    if (!contractConfigured) {
+      setRoomCreated(false)
+      setLeaderboardPlayers([])
+      setChainSyncStatus('idle')
+    }
+  }, [contractConfigured])
+
+  useEffect(() => {
+    if (!walletAddress) {
+      setRoomJoined(false)
+      return
+    }
+
+    if (connectedPlayer) {
+      setRoomJoined(true)
+      setHandle(connectedPlayer.handle || '')
+      return
+    }
+
+    if (chainSyncStatus === 'ready') {
+      setRoomJoined(false)
+    }
+  }, [chainSyncStatus, connectedPlayer, walletAddress])
+
+  useEffect(() => {
+    if (!contractConfigured || !walletAddress || !isJoined) return undefined
 
     let cancelled = false
-    getLeaderboard()
-      .then((players) => {
-        if (cancelled || !Array.isArray(players)) return
-        const joined = players.some((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress))
-        setRoomJoined(joined)
+    Promise.allSettled(CHAMBERS.map((chamber, index) => getSubmission(index, walletAddress).then((submission) => ({ chamber, submission }))))
+      .then((results) => {
+        if (cancelled) return
+        const restored = results
+          .filter((result) => result.status === 'fulfilled' && result.value.submission?.scored_at)
+          .map((result) => ({
+            playerId: 'you',
+            wallet: walletAddress,
+            handle: handle.trim() || 'Raider',
+            chamberId: result.value.chamber.id,
+            chamberLabel: result.value.chamber.label,
+            answer: result.value.submission.answer,
+            sourceUrl: result.value.submission.evidence_url,
+            tasks: result.value.chamber.tasks,
+            scoring: result.value.chamber.scoring,
+            status: 'scored',
+            score: result.value.submission.score,
+            xpAward: result.value.submission.xp_award,
+            createdAt: result.value.submission.scored_at,
+          }))
+
+        setSubmissions((current) => [
+          ...current.filter((submission) => normalizeWallet(submission.wallet) !== normalizeWallet(walletAddress)),
+          ...restored,
+        ])
       })
-      .catch(() => {
-        if (!cancelled) setRoomJoined(false)
-      })
+      .catch(() => undefined)
 
     return () => {
       cancelled = true
     }
-  }, [contractConfigured, getLeaderboard, walletAddress])
+  }, [contractConfigured, getSubmission, handle, isJoined, progressRefreshKey, walletAddress])
+
+  useEffect(() => {
+    if (!contractConfigured || !walletAddress || !isJoined) return undefined
+
+    const interval = window.setInterval(() => {
+      setProgressRefreshKey((key) => key + 1)
+    }, 12000)
+
+    return () => window.clearInterval(interval)
+  }, [contractConfigured, isJoined, walletAddress])
 
   function startRaid() {
     setRaidStarted(true)
@@ -644,6 +751,7 @@ function App() {
     setOpenedLevelIndex(index)
     setAnswer('')
     setSelectedEvidenceUrl(chamber.evidence[0]?.url ?? '')
+    setJudgingStatus('')
     window.setTimeout(() => {
       document.querySelector('.submission-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 80)
@@ -654,6 +762,8 @@ function App() {
     try {
       await contract.joinRoom(handle.trim())
       setRoomJoined(true)
+      const players = await getLeaderboard()
+      if (Array.isArray(players)) setLeaderboardPlayers(players)
     } catch {
       setRoomJoined(false)
     }
@@ -669,7 +779,7 @@ function App() {
 
     setIsConnecting(true)
     try {
-      await switchToBradbury(window.ethereum)
+      await ensureGenLayerNetwork(window.ethereum)
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
       setWalletAddress(accounts?.[0] ?? '')
     } catch (error) {
@@ -687,37 +797,62 @@ function App() {
   }
 
   async function submitChamber() {
-    if (!activeChamber || openedLevelIndex === null || !walletAddress || !roomJoined || !readiness.ready || !contract.configured) return
+    if (!activeChamber || openedLevelIndex === null || !walletAddress || !isJoined || !readiness.ready || !contract.configured) return
 
     const roundId = openedLevelIndex
+    const pendingKey = `${normalizeWallet(walletAddress)}:${roundId}`
     const prompt = `${activeChamber.prompt}\nTasks:\n${activeChamber.tasks.join('\n')}`
     const rubric = activeChamber.scoring.join(',')
 
     async function waitForSubmission() {
-      for (let attempt = 0; attempt < 8; attempt += 1) {
+      for (let attempt = 0; attempt < 45; attempt += 1) {
         try {
           return await contract.getSubmission(roundId, walletAddress)
         } catch {
-          await sleep(2500)
+          await sleep(4000)
         }
       }
-      throw new Error('Submission was accepted but is not readable yet. Try scoring again in a moment.')
+      return null
     }
 
     try {
       let submission = null
+      const isPendingJudging = pendingJudgingKeys.includes(pendingKey)
+      setJudgingStatus('Checking whether this level already has a saved answer...')
 
       try {
         submission = await contract.getSubmission(roundId, walletAddress)
       } catch {
+        if (isPendingJudging) {
+          setJudgingStatus('Your answer is already saved. Bradbury has not exposed it to reads yet; click this button again in a minute to run judging.')
+          return
+        }
+
+        setJudgingStatus('Saving your answer on Bradbury...')
         await contract.submitRound(roundId, activeChamber.label, answer.trim(), selectedEvidenceUrl)
+        setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
+        setJudgingStatus('Answer saved. Waiting for accepted state before judging...')
         submission = await waitForSubmission()
+
+        if (!submission) {
+          setJudgingStatus('Answer saved on-chain. Bradbury is still catching up; click this button again shortly to run GenLayer judging.')
+          return
+        }
       }
 
       if (!submission?.scored_at) {
+        setJudgingStatus('Running GenLayer judging. This can take 30-60 seconds.')
         await contract.scoreRound(roundId, walletAddress, prompt, rubric)
+        setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
+      } else {
+        setJudgingStatus('This level was already judged. Unlocking the next level...')
+        setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
       }
-    } catch {
+      const players = await getLeaderboard()
+      if (Array.isArray(players)) setLeaderboardPlayers(players)
+      setProgressRefreshKey((key) => key + 1)
+    } catch (error) {
+      setJudgingStatus(error?.message || 'The answer was saved, but judging did not finish. Click the button again in a moment.')
       return
     }
 
@@ -733,7 +868,7 @@ function App() {
         sourceUrl: selectedEvidenceUrl,
         tasks: activeChamber.tasks,
         scoring: activeChamber.scoring,
-        status: 'ready_for_genlayer',
+        status: 'scored',
         createdAt: new Date().toISOString(),
       },
     ])
@@ -742,6 +877,7 @@ function App() {
     setOpenedLevelIndex(null)
     setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
     setLevelNotice(`Level ${openedLevelIndex + 1} cleared. Level ${Math.min(CHAMBERS.length, openedLevelIndex + 2)} unlocked.`)
+    setJudgingStatus('Judging complete. XP has been written on-chain.')
   }
 
   return (
@@ -773,19 +909,21 @@ function App() {
           handle={handle}
           setHandle={setHandle}
           roomCreated={roomCreated}
-          roomJoined={roomJoined}
+          roomJoined={isJoined}
+          chainSyncStatus={chainSyncStatus}
           joinRoom={joinRoom}
           answer={answer}
           setAnswer={setAnswer}
           selectedEvidenceUrl={selectedEvidenceUrl}
           setSelectedEvidenceUrl={setSelectedEvidenceUrl}
           submitChamber={submitChamber}
+          judgingStatus={judgingStatus}
           gameReady={gameReady}
           setGameReady={setGameReady}
           readiness={readiness}
         />
       )}
-      {activeTab === 'leaderboard' && <LeaderboardPage walletAddress={walletAddress} handle={handle} submissions={submissions} />}
+      {activeTab === 'leaderboard' && <LeaderboardPage leaderboardPlayers={leaderboardPlayers} />}
       {activeTab === 'faq' && <FaqPage />}
     </main>
   )
