@@ -57,17 +57,17 @@ The frontend includes:
 Create `.env` from `.env.example` after deploying the contract:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x318A28B2d2C108218fb07C32Ada946e49Dc14EdA
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x1530cdd48d1c7BD5Fa702d690446d65f50290d11
 VITE_GENLAYER_NETWORK=studionet
 VITE_GENLAYER_RPC_URL=https://studio.genlayer.com/api
 ```
 
 The frontend is currently configured for StudioNet only. After redeploying `contracts/truth_raiders.py`, replace the address in `.env` and `.env.example`.
 
-Current StudioNet deployment before the latest admin-pack upgrade:
+Current StudioNet deployment:
 
 ```text
-0x318A28B2d2C108218fb07C32Ada946e49Dc14EdA
+0x1530cdd48d1c7BD5Fa702d690446d65f50290d11
 ```
 
 ## Assets

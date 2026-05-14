@@ -1299,8 +1299,12 @@ function App() {
         ])
 
         if (cancelled) return
-        if (adminResult.status === 'fulfilled') setAdminAddress(adminResult.value)
-        if (hostResult.status === 'fulfilled') setIsHost(Boolean(hostResult.value))
+        const adminValue = adminResult.status === 'fulfilled' ? adminResult.value : ''
+        const isAdminWallet = Boolean(walletAddress && adminValue && normalizeWallet(adminValue) === normalizeWallet(walletAddress))
+        const isModeratorWallet = hostResult.status === 'fulfilled' ? Boolean(hostResult.value) : false
+
+        if (adminResult.status === 'fulfilled') setAdminAddress(adminValue)
+        setIsHost(isAdminWallet || isModeratorWallet)
       } catch {
         if (!cancelled) setIsHost(false)
       }
