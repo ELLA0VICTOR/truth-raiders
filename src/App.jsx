@@ -21,6 +21,12 @@ function normalizeWallet(value) {
   return String(value || '').replace(/^Address\("(.+)"\)$/, '$1').toLowerCase()
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
 function Sigil({ name = 'mark' }) {
   return (
     <svg className="sigil" viewBox="0 0 40 40" role="img" aria-label={name}>
@@ -683,14 +689,34 @@ function App() {
   async function submitChamber() {
     if (!activeChamber || openedLevelIndex === null || !walletAddress || !roomJoined || !readiness.ready || !contract.configured) return
 
+    const roundId = openedLevelIndex
+    const prompt = `${activeChamber.prompt}\nTasks:\n${activeChamber.tasks.join('\n')}`
+    const rubric = activeChamber.scoring.join(',')
+
+    async function waitForSubmission() {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          return await contract.getSubmission(roundId, walletAddress)
+        } catch {
+          await sleep(2500)
+        }
+      }
+      throw new Error('Submission was accepted but is not readable yet. Try scoring again in a moment.')
+    }
+
     try {
-      await contract.submitRound(openedLevelIndex, activeChamber.label, answer.trim(), selectedEvidenceUrl)
-      await contract.scoreRound(
-        openedLevelIndex,
-        walletAddress,
-        `${activeChamber.prompt}\nTasks:\n${activeChamber.tasks.join('\n')}`,
-        activeChamber.scoring.join(',')
-      )
+      let submission = null
+
+      try {
+        submission = await contract.getSubmission(roundId, walletAddress)
+      } catch {
+        await contract.submitRound(roundId, activeChamber.label, answer.trim(), selectedEvidenceUrl)
+        submission = await waitForSubmission()
+      }
+
+      if (!submission?.scored_at) {
+        await contract.scoreRound(roundId, walletAddress, prompt, rubric)
+      }
     } catch {
       return
     }

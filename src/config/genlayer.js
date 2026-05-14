@@ -1,6 +1,6 @@
 import { localnet, studionet, testnetAsimov, testnetBradbury } from 'genlayer-js/chains'
 
-const DEFAULT_BRADBURY_CONTRACT = '0x5665FdEaBb3f46ddE3dF89467505c493BdF4ed41'
+const DEFAULT_BRADBURY_CONTRACT = '0xfaFB51f5Ff15F61BAC4CcDD424eB90463456bf28'
 
 export const CONTRACT_ADDRESS = import.meta.env.VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS || DEFAULT_BRADBURY_CONTRACT
 export const ROOM_ID = Number(import.meta.env.VITE_TRUTH_RAIDERS_ROOM_ID || 0)

@@ -65,12 +65,30 @@ def normalize_bool(value: typing.Any) -> bool:
 
 def normalize_score(raw_response: typing.Any) -> dict:
     parsed = parse_json(raw_response)
+    score = clamp_score(parsed.get("score", 0))
+    accepted = normalize_bool(parsed.get("accepted", False)) and score >= 55
     return {
-        "score": clamp_score(parsed.get("score", 0)),
-        "accepted": normalize_bool(parsed.get("accepted", False)),
+        "score": score,
+        "accepted": accepted,
         "reason": clean(str(parsed.get("reason", "No reason provided")), 240),
-        "xp_award": clamp_score(parsed.get("xp_award", 0)),
+        "xp_award": score if accepted else 0,
     }
+
+
+def valid_score_payload(payload: dict) -> bool:
+    score = clamp_score(payload.get("score", 0))
+    xp_award = clamp_score(payload.get("xp_award", 0))
+    reason = clean(str(payload.get("reason", "")), 240)
+    accepted = normalize_bool(payload.get("accepted", False))
+    if reason == "":
+        return False
+    if not accepted and xp_award > 0:
+        return False
+    if accepted and xp_award != score:
+        return False
+    if accepted and score < 55:
+        return False
+    return score >= 0 and score <= 100 and xp_award >= 0 and xp_award <= 100
 
 
 def close_enough(left: int, right: int) -> bool:
@@ -296,10 +314,13 @@ class TruthRaiders(gl.Contract):
         rubric_text = clean(rubric_csv, 800)
 
         def leader_fn():
-            evidence_text = ""
+            evidence_text = "No evidence URL was provided."
             if submission_memory.evidence_url != "":
-                response = gl.nondet.web.get(submission_memory.evidence_url)
-                evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
+                try:
+                    response = gl.nondet.web.get(submission_memory.evidence_url)
+                    evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
+                except Exception:
+                    evidence_text = "Evidence fetch failed. Judge the answer conservatively using the prompt and selected source URL only."
 
             scoring_prompt = f"""You are the Truth Raiders GenLayer referee.
 
@@ -318,9 +339,12 @@ Evidence URL:
 Evidence text:
 {evidence_text}
 
-Score the answer for a 5-15 minute community mini-game.
-Reward correctness, strong public evidence, clarity, and safe reasoning.
-Reject hallucinated, unrelated, private, or low-effort answers.
+Grade the answer on a 0-100 scale.
+High-quality correct answers should usually score 75-100.
+Partially correct or weakly evidenced answers should score 40-74.
+Wrong, hallucinated, unrelated, private, or low-effort answers should score 0-39.
+Set accepted to true only when the score is at least 55.
+Set xp_award equal to score when accepted is true, otherwise 0.
 
 Respond with JSON only:
 {{
@@ -329,23 +353,69 @@ Respond with JSON only:
   "reason": "Concise judging reason.",
   "xp_award": 0
 }}"""
-            raw_response = gl.nondet.exec_prompt(scoring_prompt, response_format="json")
-            return normalize_score(raw_response)
+            try:
+                raw_response = gl.nondet.exec_prompt(scoring_prompt, response_format="json")
+                return normalize_score(raw_response)
+            except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                return {
+                    "score": 0,
+                    "accepted": False,
+                    "reason": "The referee could not parse a safe scoring result.",
+                    "xp_award": 0,
+                }
 
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
                 return False
             try:
                 leader_data = normalize_score(leader_result.calldata)
-                validator_data = leader_fn()
             except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
                 return False
 
-            return (
-                leader_data["accepted"] == validator_data["accepted"]
-                and close_enough(int(leader_data["score"]), int(validator_data["score"]))
-                and close_enough(int(leader_data["xp_award"]), int(validator_data["xp_award"]))
-            )
+            if not valid_score_payload(leader_data):
+                return False
+
+            evidence_text = "No evidence URL was provided."
+            if submission_memory.evidence_url != "":
+                try:
+                    response = gl.nondet.web.get(submission_memory.evidence_url)
+                    evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
+                except Exception:
+                    evidence_text = "Evidence fetch failed. Judge the answer conservatively using the prompt and selected source URL only."
+
+            validator_prompt = f"""You are validating a Truth Raiders game verdict.
+
+Do not rescore from scratch. Decide if the leader verdict is acceptable for this prompt, answer, rubric, and evidence.
+
+Round prompt:
+{prompt_text}
+
+Rubric:
+{rubric_text}
+
+Player answer:
+{submission_memory.answer}
+
+Evidence URL:
+{submission_memory.evidence_url}
+
+Evidence text:
+{evidence_text}
+
+Leader verdict:
+{json.dumps(leader_data)}
+
+Return JSON only:
+{{
+  "valid": true,
+  "reason": "Short reason."
+}}"""
+            try:
+                raw_response = gl.nondet.exec_prompt(validator_prompt, response_format="json")
+                parsed = parse_json(raw_response)
+                return normalize_bool(parsed.get("valid", False))
+            except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                return True
 
         try:
             verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)

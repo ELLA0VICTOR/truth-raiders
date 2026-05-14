@@ -153,16 +153,16 @@ export function getReadiness(answer, selectedEvidenceUrl, chamber) {
 
   const hasEvidence = Boolean(selectedEvidenceUrl)
   const wordCount = answer.trim().split(/\s+/).filter(Boolean).length
-  const hasEnoughText = wordCount >= 18
+  const hasAnyAnswer = wordCount > 0
   const mentionsGameConcept = /genlayer|validator|consensus|evidence|source|score|xp|leader/i.test(answer)
-  const completed = (hasEvidence ? 1 : 0) + (hasEnoughText ? 1 : 0) + (mentionsGameConcept ? 1 : 0)
+  const completed = (hasEvidence ? 1 : 0) + (hasAnyAnswer ? 1 : 0) + (mentionsGameConcept ? 1 : 0)
   const required = 3
-  const ready = hasEvidence && hasEnoughText
+  const ready = hasEvidence && hasAnyAnswer
 
   return {
     ready,
     completed,
     required,
-    label: ready ? 'Ready for GenLayer judging' : `Need evidence and at least 18 words (${wordCount}/18)`,
+    label: ready ? 'Ready for GenLayer judging' : 'Select evidence and write an answer',
   }
 }

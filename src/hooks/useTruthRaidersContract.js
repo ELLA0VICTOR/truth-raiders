@@ -92,6 +92,13 @@ export function useTruthRaidersContract(walletAddress) {
     return readContract('get_leaderboard', [ROOM_ID])
   }, [readContract])
 
+  const getSubmission = useCallback(
+    (roundId, player) => {
+      return readContract('get_submission', [ROOM_ID, roundId, player])
+    },
+    [readContract]
+  )
+
   const joinRoom = useCallback(
     (handle) => {
       return writeContract('join_room', [ROOM_ID, handle, 'scribe'])
@@ -125,6 +132,7 @@ export function useTruthRaidersContract(walletAddress) {
     error,
     getRoom,
     getLeaderboard,
+    getSubmission,
     joinRoom,
     submitRound,
     scoreRound,
