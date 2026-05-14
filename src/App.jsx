@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
 import { AVATARS, CHAMBERS, RAID_SEASON, buildAnswerKey, buildAnswerPacket, getReadiness } from './data/raidContent'
@@ -7,10 +7,30 @@ import './App.css'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'lobby', label: 'Lobby' },
   { id: 'play', label: 'Play' },
   { id: 'leaderboard', label: 'Leaderboard' },
   { id: 'faq', label: 'FAQ' },
 ]
+
+function getInitialRoomId() {
+  if (typeof window === 'undefined') return 0
+  const rawRoom = new URLSearchParams(window.location.search).get('room')
+  const roomId = Number(rawRoom)
+  return Number.isInteger(roomId) && roomId >= 0 ? roomId : 0
+}
+
+function roomCodeForId(roomId) {
+  if (Number(roomId) === 0) return RAID_SEASON.roomCode
+  return `TRUTH-${String(roomId).padStart(3, '0')}`
+}
+
+function buildRoomUrl(roomId) {
+  if (typeof window === 'undefined') return `?room=${roomId}`
+  const url = new URL(window.location.href)
+  url.searchParams.set('room', String(roomId))
+  return url.toString()
+}
 
 function shortAddress(address) {
   if (!address) return ''
@@ -188,7 +208,7 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
           </p>
           <div className="hero-actions">
             <button className="primary-action" type="button" onClick={onPlay}>
-              Enter the raid room
+              Browse raid rooms
             </button>
             {!walletAddress && (
               <button className="secondary-action" type="button" onClick={onConnect}>
@@ -240,6 +260,102 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
           <span><ScrollIcon /> {CHAMBERS.length} levels</span>
           <span><ShieldIcon /> {RAID_SEASON.xpPool} XP pool</span>
         </div>
+      </div>
+    </section>
+  )
+}
+
+function LobbyPage({
+  rooms,
+  roomsStatus,
+  selectedRoomId,
+  roomSearch,
+  setRoomSearch,
+  lobbyNotice,
+  onSearchRoom,
+  onCreateRoom,
+  onSelectRoom,
+  onCopyRoom,
+  contract,
+  walletAddress,
+  onConnect,
+}) {
+  const hasRooms = rooms.length > 0
+
+  return (
+    <section className="lobby-page page-reveal">
+      <div className="page-title lobby-title">
+        <div>
+          <span className="kicker">Raid lobby</span>
+          <h1>Rooms</h1>
+          <p>Choose a public room card, create a fresh room, or paste a room ID from a shared community link.</p>
+        </div>
+        <div className="lobby-actions">
+          {!walletAddress && (
+            <button className="secondary-action" type="button" onClick={onConnect}>
+              Connect wallet
+            </button>
+          )}
+          <button className="primary-action" type="button" onClick={onCreateRoom} disabled={!walletAddress || contract.isLoading}>
+            {contract.isLoading ? 'Working...' : 'Create room'}
+          </button>
+        </div>
+      </div>
+
+      <div className="room-search-panel">
+        <label>
+          Find room
+          <input
+            value={roomSearch}
+            onChange={(event) => setRoomSearch(event.target.value)}
+            placeholder="Room ID like 2, or code like TRUTH-002"
+          />
+        </label>
+        <button className="secondary-action" type="button" onClick={onSearchRoom}>
+          Open room
+        </button>
+      </div>
+
+      {lobbyNotice && <div className="level-notice">{lobbyNotice}</div>}
+
+      {roomsStatus === 'loading' && (
+        <div className="empty-state room-empty">
+          <strong>Loading raid rooms</strong>
+          <p>Reading room count and room metadata from the StudioNet contract.</p>
+        </div>
+      )}
+
+      {roomsStatus === 'ready' && !hasRooms && (
+        <div className="empty-state room-empty">
+          <strong>No rooms yet</strong>
+          <p>Create the first room to start this week&apos;s Truth Raiders run.</p>
+        </div>
+      )}
+
+      <div className="room-card-grid">
+        {rooms.map((room) => (
+          <article className={`room-card ${Number(room.id) === Number(selectedRoomId) ? 'is-selected' : ''}`} key={room.id}>
+            <div className="room-card-top">
+              <span className="kicker">Room #{room.id}</span>
+              <b>{room.status}</b>
+            </div>
+            <h2>{room.room_code}</h2>
+            <p>{room.season_code}</p>
+            <div className="room-meta">
+              <span>{room.player_count} / {RAID_SEASON.maxPlayers} players</span>
+              <span>{room.round_count} levels</span>
+              <span>{room.xp_pool} XP</span>
+            </div>
+            <div className="room-card-actions">
+              <button className="primary-action" type="button" onClick={() => onSelectRoom(room.id, 'play')}>
+                Enter room
+              </button>
+              <button className="secondary-action" type="button" onClick={() => onCopyRoom(room.id)}>
+                Copy link
+              </button>
+            </div>
+          </article>
+        ))}
       </div>
     </section>
   )
@@ -388,6 +504,7 @@ function ChallengeModal({
 }
 
 function PlayPage({
+  selectedRoom,
   raidStarted,
   raidEnded,
   startRaid,
@@ -422,6 +539,7 @@ function PlayPage({
   readiness,
 }) {
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
+  const roomLabel = selectedRoom?.room_code || `Room #${contract.roomId}`
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
   const clockLabel = formatClock(timeLeftSeconds)
   const timerPhase = getTimerPhase(timeLeftSeconds, raidEnded)
@@ -489,7 +607,7 @@ function PlayPage({
 
       <div className="room-console">
         <div>
-          <span className="kicker">Room {RAID_SEASON.roomCode}</span>
+          <span className="kicker">{roomLabel}</span>
           <strong>
             {roomJoined
               ? 'Joined and ready'
@@ -502,7 +620,7 @@ function PlayPage({
                 : 'Deploy contract to join on-chain'}
           </strong>
           {contract.configured ? (
-            <small>Contract room #{contract.roomId}</small>
+            <small>Contract room #{contract.roomId}{selectedRoom?.player_count !== undefined ? ` / ${selectedRoom.player_count} players` : ''}</small>
           ) : (
             <small>Set VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS after deployment.</small>
           )}
@@ -620,13 +738,13 @@ function PlayPage({
   )
 }
 
-function LeaderboardPage({ leaderboardPlayers }) {
+function LeaderboardPage({ leaderboardPlayers, selectedRoom }) {
   return (
     <section className="leaderboard-page page-reveal">
       <div className="page-title">
         <span className="kicker">Weekly XP distribution</span>
         <h1>Leaderboard</h1>
-        <p>No fake raiders. Final XP appears after GenLayer validator scoring finalizes submitted packets.</p>
+        <p>{selectedRoom ? `${selectedRoom.room_code} / room #${selectedRoom.id}` : 'Select or create a room to track XP.'} Final XP appears after GenLayer validator scoring finalizes submitted packets.</p>
       </div>
       <div className="leaderboard-shell">
         <Leaderboard players={leaderboardPlayers} />
@@ -678,6 +796,11 @@ function App() {
   const [walletAddress, setWalletAddress] = useState('')
   const [walletError, setWalletError] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
+  const [selectedRoomId, setSelectedRoomId] = useState(getInitialRoomId)
+  const [rooms, setRooms] = useState([])
+  const [roomsStatus, setRoomsStatus] = useState('idle')
+  const [roomSearch, setRoomSearch] = useState('')
+  const [lobbyNotice, setLobbyNotice] = useState('')
   const [raidStarted, setRaidStarted] = useState(false)
   const [raidEnded, setRaidEnded] = useState(false)
   const [raidEndsAt, setRaidEndsAt] = useState(0)
@@ -701,8 +824,12 @@ function App() {
   const [pendingJudgingKeys, setPendingJudgingKeys] = useState([])
   const timerWarningRef = useRef({ warning: false, danger: false, final: false })
 
-  const contract = useTruthRaidersContract(walletAddress)
-  const { configured: contractConfigured, getRoom, getLeaderboard, getRoomCount, getSubmission } = contract
+  const contract = useTruthRaidersContract(walletAddress, selectedRoomId)
+  const { configured: contractConfigured, getRoom, getRoomById, getLeaderboard, getRoomCount, getSubmission } = contract
+  const selectedRoom = useMemo(
+    () => rooms.find((room) => Number(room.id) === Number(selectedRoomId)) || null,
+    [rooms, selectedRoomId]
+  )
   const connectedPlayer = useMemo(
     () => leaderboardPlayers.find((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress)),
     [leaderboardPlayers, walletAddress]
@@ -729,6 +856,31 @@ function App() {
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
   const readiness = getReadiness(selectedAnswers, selectedEvidenceUrl, activeChamber)
 
+  const refreshRooms = useCallback(async () => {
+    if (!contractConfigured) {
+      setRooms([])
+      setRoomsStatus('idle')
+      return []
+    }
+
+    setRoomsStatus((status) => (status === 'ready' ? 'ready' : 'loading'))
+    try {
+      const count = Number(await getRoomCount())
+      const ids = Array.from({ length: Math.max(0, count) }, (_, index) => index)
+      const results = await Promise.allSettled(ids.map((roomId) => getRoomById(roomId)))
+      const loadedRooms = results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value)
+
+      setRooms(loadedRooms)
+      setRoomsStatus('ready')
+      return loadedRooms
+    } catch {
+      setRoomsStatus('error')
+      return []
+    }
+  }, [contractConfigured, getRoomById, getRoomCount])
+
   useEffect(() => {
     if (!window.ethereum) return undefined
 
@@ -745,6 +897,38 @@ function App() {
     window.ethereum.on?.('accountsChanged', handleAccountsChanged)
     return () => window.ethereum.removeListener?.('accountsChanged', handleAccountsChanged)
   }, [])
+
+  useEffect(() => {
+    function handlePopState() {
+      setSelectedRoomId(getInitialRoomId())
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('room') === String(selectedRoomId)) return
+    url.searchParams.set('room', String(selectedRoomId))
+    window.history.replaceState({}, '', url)
+  }, [selectedRoomId])
+
+  useEffect(() => {
+    if (!contractConfigured) return undefined
+
+    let cancelled = false
+    refreshRooms()
+
+    const interval = window.setInterval(() => {
+      if (!cancelled) refreshRooms()
+    }, 12000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [contractConfigured, refreshRooms])
 
   useEffect(() => {
     if (!contractConfigured) return undefined
@@ -867,6 +1051,23 @@ function App() {
   }, [contractConfigured, isJoined, walletAddress])
 
   useEffect(() => {
+    setRoomCreated(false)
+    setRoomJoined(false)
+    setLeaderboardPlayers([])
+    setSubmissions([])
+    setOpenedLevelIndex(null)
+    setSelectedAnswers({})
+    setSelectedEvidenceUrl('')
+    setJudgingStatus('')
+    setLevelNotice('')
+    setRaidStarted(false)
+    setRaidEnded(false)
+    setRaidEndsAt(0)
+    setTimeLeftSeconds(RAID_DURATION_SECONDS)
+    setTimerToast('')
+  }, [selectedRoomId])
+
+  useEffect(() => {
     if (!raidStarted || !raidEndsAt) return undefined
 
     const toastTimeouts = []
@@ -914,6 +1115,19 @@ function App() {
       toastTimeouts.forEach((timeout) => window.clearTimeout(timeout))
     }
   }, [raidEndsAt, raidStarted])
+
+  function selectRoom(roomId, tab = 'play') {
+    const nextRoomId = Number(roomId)
+    if (!Number.isInteger(nextRoomId) || nextRoomId < 0) {
+      setLobbyNotice('Enter a valid room ID.')
+      return
+    }
+
+    setSelectedRoomId(nextRoomId)
+    setActiveTab(tab)
+    setLobbyNotice(`Room #${nextRoomId} selected.`)
+    window.setTimeout(() => setLobbyNotice(''), 2600)
+  }
 
   function startRaid() {
     const endsAt = Date.now() + RAID_DURATION_SECONDS * 1000
@@ -980,18 +1194,48 @@ function App() {
   }
 
   async function createRaidRoom() {
-    if (!walletAddress || roomCreated || !contract.configured) return
+    if (!walletAddress || !contract.configured) return
     try {
-      await contract.createRoom(RAID_SEASON.code, RAID_SEASON.roomCode, CHAMBERS.length, RAID_SEASON.xpPool)
+      const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
+      const roomCode = roomCodeForId(nextRoomId)
+      await contract.createRoom(RAID_SEASON.code, roomCode, CHAMBERS.length, RAID_SEASON.xpPool)
+      await refreshRooms()
+      selectRoom(nextRoomId, 'play')
       setRoomCreated(true)
       setChainSyncStatus('ready')
-      getLeaderboard()
-        .then((players) => {
-          if (Array.isArray(players)) setLeaderboardPlayers(players)
-        })
-        .catch(() => undefined)
     } catch {
-      setRoomCreated(false)
+      setLobbyNotice('Room creation failed. Try again in a moment.')
+    }
+  }
+
+  function searchRoom() {
+    const query = roomSearch.trim()
+    if (!query) {
+      setLobbyNotice('Enter a room ID or code.')
+      return
+    }
+
+    if (/^\d+$/.test(query)) {
+      selectRoom(Number(query), 'play')
+      return
+    }
+
+    const match = rooms.find((room) => room.room_code.toLowerCase() === query.toLowerCase())
+    if (!match) {
+      setLobbyNotice('No matching room code was found in the lobby.')
+      return
+    }
+
+    selectRoom(match.id, 'play')
+  }
+
+  async function copyRoomLink(roomId) {
+    const link = buildRoomUrl(roomId)
+    try {
+      await navigator.clipboard.writeText(link)
+      setLobbyNotice(`Copied room #${roomId} link.`)
+    } catch {
+      setLobbyNotice(link)
     }
   }
 
@@ -1123,9 +1367,27 @@ function App() {
         isConnecting={isConnecting}
       />
 
-      {activeTab === 'overview' && <OverviewPage onPlay={startRaid} walletAddress={walletAddress} onConnect={connectWallet} />}
+      {activeTab === 'overview' && <OverviewPage onPlay={() => setActiveTab('lobby')} walletAddress={walletAddress} onConnect={connectWallet} />}
+      {activeTab === 'lobby' && (
+        <LobbyPage
+          rooms={rooms}
+          roomsStatus={roomsStatus}
+          selectedRoomId={selectedRoomId}
+          roomSearch={roomSearch}
+          setRoomSearch={setRoomSearch}
+          lobbyNotice={lobbyNotice}
+          onSearchRoom={searchRoom}
+          onCreateRoom={createRaidRoom}
+          onSelectRoom={selectRoom}
+          onCopyRoom={copyRoomLink}
+          contract={contract}
+          walletAddress={walletAddress}
+          onConnect={connectWallet}
+        />
+      )}
       {activeTab === 'play' && (
         <PlayPage
+          selectedRoom={selectedRoom}
           raidStarted={raidStarted}
           raidEnded={raidEnded}
           startRaid={startRaid}
@@ -1160,7 +1422,7 @@ function App() {
           readiness={readiness}
         />
       )}
-      {activeTab === 'leaderboard' && <LeaderboardPage leaderboardPlayers={leaderboardPlayers} />}
+      {activeTab === 'leaderboard' && <LeaderboardPage leaderboardPlayers={leaderboardPlayers} selectedRoom={selectedRoom} />}
       {activeTab === 'faq' && <FaqPage />}
     </main>
   )

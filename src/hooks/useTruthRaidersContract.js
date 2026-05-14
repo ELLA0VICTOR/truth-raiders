@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from 'react'
 import { createClient } from 'genlayer-js'
 import { ExecutionResult, TransactionStatus } from 'genlayer-js/types'
-import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_RPC_URL, ROOM_ID, ensureGenLayerNetwork, isContractConfigured } from '../config/genlayer'
+import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_RPC_URL, ensureGenLayerNetwork, isContractConfigured } from '../config/genlayer'
 
-export function useTruthRaidersContract(walletAddress) {
+export function useTruthRaidersContract(walletAddress, roomId = 0) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const configured = isContractConfigured()
+  const activeRoomId = Number.isFinite(Number(roomId)) ? Number(roomId) : 0
 
   const readClient = useMemo(() => {
     if (!configured) return null
@@ -84,13 +85,21 @@ export function useTruthRaidersContract(walletAddress) {
     [readClient]
   )
 
+  const getRoomById = useCallback((targetRoomId) => {
+    return readContract('get_room', [Number(targetRoomId)])
+  }, [readContract])
+
   const getRoom = useCallback(() => {
-    return readContract('get_room', [ROOM_ID])
+    return getRoomById(activeRoomId)
+  }, [activeRoomId, getRoomById])
+
+  const getLeaderboardById = useCallback((targetRoomId) => {
+    return readContract('get_leaderboard', [Number(targetRoomId)])
   }, [readContract])
 
   const getLeaderboard = useCallback(() => {
-    return readContract('get_leaderboard', [ROOM_ID])
-  }, [readContract])
+    return getLeaderboardById(activeRoomId)
+  }, [activeRoomId, getLeaderboardById])
 
   const getRoomCount = useCallback(() => {
     return readContract('get_room_count')
@@ -98,9 +107,9 @@ export function useTruthRaidersContract(walletAddress) {
 
   const getSubmission = useCallback(
     (roundId, player) => {
-      return readContract('get_submission', [ROOM_ID, roundId, player])
+      return readContract('get_submission', [activeRoomId, roundId, player])
     },
-    [readContract]
+    [activeRoomId, readContract]
   )
 
   const createRoom = useCallback(
@@ -112,37 +121,39 @@ export function useTruthRaidersContract(walletAddress) {
 
   const joinRoom = useCallback(
     (handle) => {
-      return writeContract('join_room', [ROOM_ID, handle, 'scribe'])
+      return writeContract('join_room', [activeRoomId, handle, 'scribe'])
     },
-    [writeContract]
+    [activeRoomId, writeContract]
   )
 
   const submitRound = useCallback(
     (roundId, chamber, answer, evidenceUrl) => {
-      return writeContract('submit_round', [ROOM_ID, roundId, chamber, answer, evidenceUrl])
+      return writeContract('submit_round', [activeRoomId, roundId, chamber, answer, evidenceUrl])
     },
-    [writeContract]
+    [activeRoomId, writeContract]
   )
 
   const scoreRound = useCallback(
     (roundId, player, prompt, rubricCsv) => {
-      return writeContract('score_round', [ROOM_ID, roundId, player, prompt, rubricCsv])
+      return writeContract('score_round', [activeRoomId, roundId, player, prompt, rubricCsv])
     },
-    [writeContract]
+    [activeRoomId, writeContract]
   )
 
   const finalizeRoom = useCallback(() => {
-    return writeContract('finalize_room', [ROOM_ID])
-  }, [writeContract])
+    return writeContract('finalize_room', [activeRoomId])
+  }, [activeRoomId, writeContract])
 
   return {
     configured,
     contractAddress: CONTRACT_ADDRESS,
-    roomId: ROOM_ID,
+    roomId: activeRoomId,
     isLoading,
     error,
     getRoom,
+    getRoomById,
     getLeaderboard,
+    getLeaderboardById,
     getRoomCount,
     getSubmission,
     createRoom,

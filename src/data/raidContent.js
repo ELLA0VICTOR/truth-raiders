@@ -3,7 +3,7 @@ export const RAID_SEASON = {
   roomCode: 'TRUTH-7C2',
   durationMinutes: 12,
   xpPool: 1200,
-  maxPlayers: 8,
+  maxPlayers: 50,
   finality: 'GenLayer Optimistic Democracy',
 }
 

@@ -662,6 +662,123 @@ h1 {
   margin-top: 12px;
 }
 
+.lobby-title {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.lobby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.room-search-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  border: 1px solid var(--line);
+  background: rgba(10, 12, 8, 0.82);
+  box-shadow: 0 24px 80px var(--shadow);
+  padding: 16px;
+  margin-top: 18px;
+}
+
+.room-search-panel label {
+  margin-top: 0;
+}
+
+.room-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.room-card {
+  border: 1px solid var(--line);
+  background: rgba(10, 12, 8, 0.88);
+  box-shadow: 0 24px 80px var(--shadow);
+  padding: 18px;
+  position: relative;
+  overflow: hidden;
+}
+
+.room-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-top: 1px solid rgba(241, 232, 201, 0.12);
+}
+
+.room-card.is-selected {
+  border-color: rgba(201, 181, 107, 0.68);
+  background: rgba(201, 181, 107, 0.08);
+}
+
+.room-card-top,
+.room-card-actions,
+.room-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.room-card-top {
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.room-card-top b {
+  color: var(--moss-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.room-card h2 {
+  font-size: clamp(30px, 4vw, 48px);
+  letter-spacing: -0.055em;
+  margin-bottom: 8px;
+}
+
+.room-card p {
+  color: var(--parchment-dim);
+  min-height: 48px;
+  line-height: 1.5;
+}
+
+.room-meta {
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.room-meta span {
+  border: 1px solid var(--line);
+  color: var(--parchment);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.room-card-actions {
+  justify-content: space-between;
+  align-items: stretch;
+}
+
+.room-empty {
+  margin-top: 18px;
+}
+
 .setup-grid {
   display: grid;
   grid-template-columns: 0.95fr 1.05fr;
@@ -1359,6 +1476,7 @@ input:focus {
   .landing-hero,
   .overview-grid,
   .season-banner,
+  .room-card-grid,
   .setup-grid,
   .setup-grid.compact,
   .play-main,
@@ -1382,6 +1500,7 @@ input:focus {
   }
 
   .room-console,
+  .room-search-panel,
   .artifact-panel {
     grid-template-columns: 1fr;
   }
@@ -1398,8 +1517,11 @@ input:focus {
 
   .site-nav,
   .play-header,
+  .lobby-title,
   .play-controls,
   .packet-foot,
+  .lobby-actions,
+  .room-card-actions,
   .room-actions,
   .game-topbar {
     flex-direction: column;
