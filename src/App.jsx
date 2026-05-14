@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
-import { AVATARS, CHAMBERS, RAID_SEASON, getReadiness } from './data/raidContent'
+import { AVATARS, CHAMBERS, RAID_SEASON, buildAnswerKey, buildAnswerPacket, getReadiness } from './data/raidContent'
 import { ensureGenLayerNetwork } from './config/genlayer'
 import './App.css'
 
@@ -25,6 +25,22 @@ function sleep(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms)
   })
+}
+
+const RAID_DURATION_SECONDS = RAID_SEASON.durationMinutes * 60
+
+function formatClock(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds) || 0)
+  const minutes = Math.floor(safeSeconds / 60)
+  const seconds = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function getTimerPhase(totalSeconds, raidEnded) {
+  if (raidEnded || totalSeconds <= 0) return 'is-ended'
+  if (totalSeconds <= 30) return 'is-critical'
+  if (totalSeconds <= 90) return 'is-warning'
+  return 'is-steady'
 }
 
 function Sigil({ name = 'mark' }) {
@@ -229,10 +245,156 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
   )
 }
 
+function ChallengeModal({
+  activeChamber,
+  levelNumber,
+  onClose,
+  walletAddress,
+  onConnect,
+  walletError,
+  contract,
+  roomJoined,
+  selectedAnswers,
+  setSelectedAnswers,
+  selectedEvidenceUrl,
+  setSelectedEvidenceUrl,
+  submitChamber,
+  judgingStatus,
+  readiness,
+  canSubmit,
+  submitDisabledReason,
+  clockLabel,
+  timerPhase,
+}) {
+  useEffect(() => {
+    if (!activeChamber) return undefined
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    function handleEscape(event) {
+      if (event.key === 'Escape' && !contract.isLoading) onClose()
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [activeChamber, contract.isLoading, onClose])
+
+  if (!activeChamber) return null
+
+  return (
+    <div className="challenge-modal-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !contract.isLoading) onClose()
+    }}>
+      <section className="challenge-modal" role="dialog" aria-modal="true" aria-labelledby="challenge-title">
+        <div className={`modal-command-strip ${timerPhase}`}>
+          <span>Level {levelNumber} / {clockLabel}</span>
+          <button type="button" onClick={onClose} aria-label="Close challenge">
+            Close
+          </button>
+        </div>
+
+        <div className="modal-scroll">
+          <div className="panel-heading">
+            <span>{activeChamber.label}</span>
+            <span className="fine">validator packet</span>
+          </div>
+          <h2 id="challenge-title">{activeChamber.title}</h2>
+          <p className="prompt">{activeChamber.prompt}</p>
+          <p className="instruction">{activeChamber.instruction}</p>
+
+          <div className="question-stack">
+            {activeChamber.questions.map((question, index) => (
+              <article className="mcq-card" key={question.id}>
+                <div className="mcq-question">
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <h3>{question.prompt}</h3>
+                </div>
+                <div className="mcq-options">
+                  {question.options.map((option, optionIndex) => (
+                    <button
+                      className={selectedAnswers[question.id] === optionIndex ? 'is-selected' : ''}
+                      key={option}
+                      type="button"
+                      onClick={() => setSelectedAnswers((current) => ({ ...current, [question.id]: optionIndex }))}
+                    >
+                      <b>{String.fromCharCode(65 + optionIndex)}</b>
+                      <span>{option}</span>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <ArtifactPanel artifact={activeChamber.artifact} />
+
+          <div className="evidence-grid">
+            {activeChamber.evidence.map((evidence) => (
+              <button
+                className={`evidence-card ${selectedEvidenceUrl === evidence.url ? 'is-selected' : ''}`}
+                key={evidence.url}
+                type="button"
+                onClick={() => setSelectedEvidenceUrl(evidence.url)}
+              >
+                <span>{evidence.source}</span>
+                <strong>{evidence.title}</strong>
+                <small>{evidence.clue}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="score-strip readiness-strip">
+            <span>{readiness.label}</span>
+            <strong>{readiness.completed}/{readiness.required}</strong>
+          </div>
+
+          {!walletAddress && (
+            <div className="wallet-gate">
+              <strong>Wallet needed for scored submissions</strong>
+              <p>Connect before sealing answers so XP can belong to a player address.</p>
+              <button className="secondary-action" type="button" onClick={onConnect}>
+                Connect wallet
+              </button>
+              {walletError && <small>{walletError}</small>}
+            </div>
+          )}
+          {walletAddress && !roomJoined && (
+            <div className="wallet-gate">
+              <strong>Join the room first</strong>
+              <p>{contract.configured ? 'Add a handle in the room console so the contract can register your run.' : 'Deploy and configure the contract address before final scoring.'}</p>
+            </div>
+          )}
+
+          <button
+            className="primary-action wide"
+            type="button"
+            onClick={submitChamber}
+            disabled={!canSubmit}
+            title={submitDisabledReason || 'Submit to GenLayer judging'}
+          >
+            {contract.isLoading ? 'Working on-chain...' : walletAddress ? 'Submit / run judging' : 'Connect wallet to submit'}
+          </button>
+          {judgingStatus && <p className="judging-status">{judgingStatus}</p>}
+          {submitDisabledReason && <small className="submit-hint">{submitDisabledReason}</small>}
+          {contract.error && <p className="contract-error">{contract.error}</p>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function PlayPage({
   raidStarted,
+  raidEnded,
   startRaid,
+  timeLeftSeconds,
+  timerToast,
   openedLevelIndex,
+  closeLevel,
   openLevel,
   nearChamber,
   setNearChamber,
@@ -247,9 +409,10 @@ function PlayPage({
   roomCreated,
   roomJoined,
   chainSyncStatus,
+  createRoom,
   joinRoom,
-  answer,
-  setAnswer,
+  selectedAnswers,
+  setSelectedAnswers,
   selectedEvidenceUrl,
   setSelectedEvidenceUrl,
   submitChamber,
@@ -260,6 +423,8 @@ function PlayPage({
 }) {
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
+  const clockLabel = formatClock(timeLeftSeconds)
+  const timerPhase = getTimerPhase(timeLeftSeconds, raidEnded)
   const joinDisabledReason = !contract.configured
     ? 'Contract is not configured.'
     : !walletAddress
@@ -267,7 +432,7 @@ function PlayPage({
       : roomJoined
         ? 'This wallet is already joined from on-chain state.'
       : chainSyncStatus !== 'ready'
-        ? 'Syncing room and player state from Bradbury...'
+        ? 'Syncing room and player state from GenLayer...'
       : !roomCreated
         ? 'Room was not found on the deployed contract.'
         : !handle.trim()
@@ -276,19 +441,29 @@ function PlayPage({
             ? 'Transaction in progress.'
             : ''
   const canJoinRoom = joinDisabledReason === ''
-  const submitDisabledReason = !contract.configured
+  const createDisabledReason = !contract.configured
     ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
-      : !roomJoined
-        ? 'Join the room first.'
-        : !activeChamber
-          ? 'Open a level first.'
-          : !readiness.ready
-            ? readiness.label
-            : contract.isLoading
-              ? 'Transaction in progress.'
-              : ''
+      : chainSyncStatus !== 'ready'
+        ? 'Checking whether room already exists.'
+      : roomCreated
+        ? 'Room already exists.'
+        : contract.isLoading
+          ? 'Transaction in progress.'
+          : ''
+  const canCreateRoom = createDisabledReason === ''
+  const submitDisabledReason = (() => {
+    if (!contract.configured) return 'Contract is not configured.'
+    if (!walletAddress) return 'Connect a wallet first.'
+    if (!roomJoined) return 'Join the room first.'
+    if (raidEnded) return 'Raid timer ended. Game over.'
+    if (!raidStarted) return 'Start the raid first.'
+    if (!activeChamber) return 'Open a level first.'
+    if (!readiness.ready) return readiness.label
+    if (contract.isLoading) return 'Transaction in progress.'
+    return ''
+  })()
   const canSubmit = submitDisabledReason === ''
 
   return (
@@ -298,10 +473,19 @@ function PlayPage({
           <span className="kicker">Level {levelNumber} / {CHAMBERS.length}</span>
           <h1>The False-Light Catacombs</h1>
         </div>
-        <button className="primary-action" type="button" onClick={startRaid}>
-          {raidStarted ? 'Raid running' : 'Start raid'}
-        </button>
+        <div className="play-controls">
+          <div className={`raid-clock ${timerPhase}`}>
+            <TimerIcon />
+            <span>Raid clock</span>
+            <strong>{clockLabel}</strong>
+          </div>
+          <button className="primary-action" type="button" onClick={startRaid}>
+            {raidStarted || raidEnded ? 'Restart raid' : 'Start raid'}
+          </button>
+        </div>
       </div>
+
+      {timerToast && <div className={`timer-toast ${timerPhase}`}>{timerToast}</div>}
 
       <div className="room-console">
         <div>
@@ -314,7 +498,7 @@ function PlayPage({
                   ? 'Room live - join to submit'
                   : chainSyncStatus === 'ready'
                     ? 'Room not found on-chain'
-                    : 'Syncing room from Bradbury'
+                    : 'Syncing room from GenLayer'
                 : 'Deploy contract to join on-chain'}
           </strong>
           {contract.configured ? (
@@ -333,8 +517,14 @@ function PlayPage({
           />
         </label>
         <div className="room-actions">
-          <button className="secondary-action" type="button" disabled>
-            {roomCreated ? 'Room live' : 'Waiting for room'}
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={createRoom}
+            disabled={!canCreateRoom}
+            title={createDisabledReason || 'Create the weekly raid room on-chain'}
+          >
+            {roomCreated ? 'Room live' : contract.isLoading ? 'Working...' : 'Create room'}
           </button>
           <button className="secondary-action" type="button" onClick={joinRoom} disabled={!canJoinRoom} title={joinDisabledReason || 'Join this room'}>
             {roomJoined ? 'Room joined' : contract.isLoading ? 'Working...' : 'Join room'}
@@ -346,9 +536,11 @@ function PlayPage({
 
       <div className="game-frame game-frame-wide">
         <div className="game-topbar">
-          <span>{gameReady ? 'raid engine online' : 'loading raid engine'}</span>
+          <span>{raidEnded ? 'raid complete: game over' : gameReady ? 'raid engine online' : raidStarted ? 'loading raid engine' : 'raid engine standby'}</span>
           <span>
-            {nearChamber !== null
+            {raidEnded
+              ? 'timer expired'
+              : nearChamber !== null
               ? nearChamber <= unlockedLevelIndex
                 ? `press space for level 0${nearChamber + 1}`
                 : `level 0${nearChamber + 1} locked`
@@ -356,7 +548,13 @@ function PlayPage({
           </span>
         </div>
         {levelNotice && <div className="level-notice">{levelNotice}</div>}
-        {raidStarted ? (
+        {raidEnded ? (
+          <div className="game-over-map">
+            <Sigil name="game over seal" />
+            <strong>Game over</strong>
+            <p>The raid clock reached zero. Check the leaderboard or restart the room run.</p>
+          </div>
+        ) : raidStarted ? (
           <TruthRaidersGame
             avatarFrame={AVATARS[0].frame}
             onReady={() => setGameReady(true)}
@@ -373,100 +571,6 @@ function PlayPage({
       </div>
 
       <section className="play-main">
-        <div className="panel submission-panel">
-          {activeChamber ? (
-            <>
-              <div className="panel-heading">
-                <span>Level {levelNumber}</span>
-                <span className="fine">{activeChamber.label}</span>
-              </div>
-              <h2>{activeChamber.title}</h2>
-              <p className="prompt">{activeChamber.prompt}</p>
-              <p className="instruction">{activeChamber.instruction}</p>
-
-              <div className="task-list">
-                {activeChamber.tasks.map((task, index) => (
-                  <div className="rule-row" key={task}>
-                    <span>{String(index + 1).padStart(2, '0')}</span>
-                    <p>{task}</p>
-                  </div>
-                ))}
-              </div>
-
-              <ArtifactPanel artifact={activeChamber.artifact} />
-
-              <div className="evidence-grid">
-                {activeChamber.evidence.map((evidence) => (
-                  <button
-                    className={`evidence-card ${selectedEvidenceUrl === evidence.url ? 'is-selected' : ''}`}
-                    key={evidence.url}
-                    type="button"
-                    onClick={() => setSelectedEvidenceUrl(evidence.url)}
-                  >
-                    <span>{evidence.source}</span>
-                    <strong>{evidence.title}</strong>
-                    <small>{evidence.clue}</small>
-                  </button>
-                ))}
-              </div>
-
-              <label>
-                Raider answer
-                <textarea
-                  value={answer}
-                  onChange={(event) => setAnswer(event.target.value)}
-                  placeholder="Complete the level tasks using the selected evidence..."
-                />
-              </label>
-
-              <div className="score-strip readiness-strip">
-                <span>{readiness.label}</span>
-                <strong>{readiness.completed}/{readiness.required}</strong>
-              </div>
-
-              {!walletAddress && (
-                <div className="wallet-gate">
-                  <strong>Wallet needed for scored submissions</strong>
-                  <p>Connect before sealing answers so XP can belong to a player address.</p>
-                  <button className="secondary-action" type="button" onClick={onConnect}>
-                    Connect wallet
-                  </button>
-                  {walletError && <small>{walletError}</small>}
-                </div>
-              )}
-              {walletAddress && !roomJoined && (
-                <div className="wallet-gate">
-                  <strong>Join the room first</strong>
-                  <p>{contract.configured ? 'Add a handle in the room console so the contract can register your run.' : 'Deploy and configure the contract address before final scoring.'}</p>
-                </div>
-              )}
-
-              <button
-                className="primary-action wide"
-                type="button"
-                onClick={submitChamber}
-                disabled={!canSubmit}
-                title={submitDisabledReason || 'Submit to GenLayer judging'}
-              >
-                {contract.isLoading ? 'Working on-chain...' : walletAddress ? 'Submit / run judging' : 'Connect wallet to submit'}
-              </button>
-              {judgingStatus && <p className="judging-status">{judgingStatus}</p>}
-              {submitDisabledReason && <small className="submit-hint">{submitDisabledReason}</small>}
-              {contract.error && <p className="contract-error">{contract.error}</p>}
-            </>
-          ) : (
-            <div className="locked-challenge">
-              <div className="panel-heading">
-                <span>Challenge locked</span>
-                <span className="fine">open a level</span>
-              </div>
-              <h2>Find a glowing marker</h2>
-              <p className="prompt">Walk to a level marker in the dungeon and press Space to reveal the challenge.</p>
-              <p className="instruction">Questions and evidence cards only appear after you open a level.</p>
-            </div>
-          )}
-        </div>
-
         <div className="panel how-to-play">
           <div className="panel-heading">
             <span>How to play</span>
@@ -482,7 +586,7 @@ function PlayPage({
           </div>
           <div className="rule-row">
             <span>03</span>
-            <p>Complete the task list, choose an evidence card, and write one strong answer.</p>
+            <p>Answer five fast questions, choose an evidence card, and submit the packet.</p>
           </div>
           <div className="rule-row">
             <span>04</span>
@@ -490,6 +594,28 @@ function PlayPage({
           </div>
         </div>
       </section>
+
+      <ChallengeModal
+        activeChamber={activeChamber}
+        levelNumber={levelNumber}
+        onClose={closeLevel}
+        walletAddress={walletAddress}
+        onConnect={onConnect}
+        walletError={walletError}
+        contract={contract}
+        roomJoined={roomJoined}
+        selectedAnswers={selectedAnswers}
+        setSelectedAnswers={setSelectedAnswers}
+        selectedEvidenceUrl={selectedEvidenceUrl}
+        setSelectedEvidenceUrl={setSelectedEvidenceUrl}
+        submitChamber={submitChamber}
+        judgingStatus={judgingStatus}
+        readiness={readiness}
+        canSubmit={canSubmit}
+        submitDisabledReason={submitDisabledReason}
+        clockLabel={clockLabel}
+        timerPhase={timerPhase}
+      />
     </section>
   )
 }
@@ -553,13 +679,17 @@ function App() {
   const [walletError, setWalletError] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [raidStarted, setRaidStarted] = useState(false)
+  const [raidEnded, setRaidEnded] = useState(false)
+  const [raidEndsAt, setRaidEndsAt] = useState(0)
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState(RAID_DURATION_SECONDS)
+  const [timerToast, setTimerToast] = useState('')
   const [handle, setHandle] = useState('')
   const [roomCreated, setRoomCreated] = useState(false)
   const [roomJoined, setRoomJoined] = useState(false)
   const [, setActiveChamberIndex] = useState(0)
   const [openedLevelIndex, setOpenedLevelIndex] = useState(null)
   const [nearChamber, setNearChamber] = useState(null)
-  const [answer, setAnswer] = useState('')
+  const [selectedAnswers, setSelectedAnswers] = useState({})
   const [selectedEvidenceUrl, setSelectedEvidenceUrl] = useState('')
   const [submissions, setSubmissions] = useState([])
   const [gameReady, setGameReady] = useState(false)
@@ -569,9 +699,10 @@ function App() {
   const [progressRefreshKey, setProgressRefreshKey] = useState(0)
   const [chainSyncStatus, setChainSyncStatus] = useState('idle')
   const [pendingJudgingKeys, setPendingJudgingKeys] = useState([])
+  const timerWarningRef = useRef({ warning: false, danger: false, final: false })
 
   const contract = useTruthRaidersContract(walletAddress)
-  const { configured: contractConfigured, getRoom, getLeaderboard, getSubmission } = contract
+  const { configured: contractConfigured, getRoom, getLeaderboard, getRoomCount, getSubmission } = contract
   const connectedPlayer = useMemo(
     () => leaderboardPlayers.find((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress)),
     [leaderboardPlayers, walletAddress]
@@ -596,7 +727,7 @@ function App() {
   const nextLevelIndex = CHAMBERS.findIndex((chamber) => !completedLevelIds.has(chamber.id))
   const unlockedLevelIndex = nextLevelIndex === -1 ? CHAMBERS.length - 1 : nextLevelIndex
   const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
-  const readiness = getReadiness(answer, selectedEvidenceUrl, activeChamber)
+  const readiness = getReadiness(selectedAnswers, selectedEvidenceUrl, activeChamber)
 
   useEffect(() => {
     if (!window.ethereum) return undefined
@@ -624,9 +755,10 @@ function App() {
       if (cancelled) return
       setChainSyncStatus((status) => (status === 'ready' ? 'ready' : 'syncing'))
 
-      const [roomResult, leaderboardResult] = await Promise.allSettled([
+      const [roomResult, leaderboardResult, roomCountResult] = await Promise.allSettled([
         getRoom(),
         getLeaderboard(),
+        getRoomCount(),
       ])
 
       if (cancelled) return
@@ -640,10 +772,16 @@ function App() {
         setLeaderboardPlayers(leaderboardResult.value)
       }
 
-      if (roomResult.status === 'fulfilled' || leaderboardResult.status === 'fulfilled') {
+      if (roomCountResult.status === 'fulfilled' && Number(roomCountResult.value || 0) <= Number(contract.roomId || 0)) {
+        setRoomCreated(false)
+        setLeaderboardPlayers([])
+      }
+
+      if (roomResult.status === 'fulfilled' || leaderboardResult.status === 'fulfilled' || roomCountResult.status === 'fulfilled') {
         setChainSyncStatus('ready')
       } else {
-        setChainSyncStatus((status) => (status === 'ready' ? 'ready' : 'syncing'))
+        setRoomCreated(false)
+        setChainSyncStatus('ready')
       }
     }
 
@@ -654,7 +792,7 @@ function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contractConfigured, getLeaderboard, getRoom])
+  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount])
 
   useEffect(() => {
     if (!contractConfigured) {
@@ -728,17 +866,86 @@ function App() {
     return () => window.clearInterval(interval)
   }, [contractConfigured, isJoined, walletAddress])
 
+  useEffect(() => {
+    if (!raidStarted || !raidEndsAt) return undefined
+
+    const toastTimeouts = []
+
+    function flashTimerToast(message) {
+      setTimerToast(message)
+      const timeout = window.setTimeout(() => setTimerToast(''), 4200)
+      toastTimeouts.push(timeout)
+    }
+
+    function tick() {
+      const remaining = Math.max(0, Math.ceil((raidEndsAt - Date.now()) / 1000))
+      setTimeLeftSeconds(remaining)
+
+      if (remaining <= 180 && remaining > 90 && !timerWarningRef.current.warning) {
+        timerWarningRef.current.warning = true
+        flashTimerToast(`${formatClock(remaining)} left. Keep moving.`)
+      }
+
+      if (remaining <= 90 && remaining > 30 && !timerWarningRef.current.danger) {
+        timerWarningRef.current.danger = true
+        flashTimerToast(`${formatClock(remaining)} left. Raid clock is turning hot.`)
+      }
+
+      if (remaining <= 30 && remaining > 0 && !timerWarningRef.current.final) {
+        timerWarningRef.current.final = true
+        flashTimerToast(`${formatClock(remaining)} left. Final answers now.`)
+      }
+
+      if (remaining <= 0) {
+        setRaidStarted(false)
+        setRaidEnded(true)
+        setOpenedLevelIndex(null)
+        setJudgingStatus('')
+        setTimerToast('Game over. The raid clock reached zero.')
+        setLevelNotice('Raid clock hit zero. Game over.')
+      }
+    }
+
+    tick()
+    const interval = window.setInterval(tick, 1000)
+
+    return () => {
+      window.clearInterval(interval)
+      toastTimeouts.forEach((timeout) => window.clearTimeout(timeout))
+    }
+  }, [raidEndsAt, raidStarted])
+
   function startRaid() {
+    const endsAt = Date.now() + RAID_DURATION_SECONDS * 1000
+    timerWarningRef.current = { warning: false, danger: false, final: false }
     setRaidStarted(true)
+    setRaidEnded(false)
+    setRaidEndsAt(endsAt)
+    setTimeLeftSeconds(RAID_DURATION_SECONDS)
+    setTimerToast(`Raid clock started: ${formatClock(RAID_DURATION_SECONDS)}`)
     setActiveTab('play')
     setActiveChamberIndex(0)
     setOpenedLevelIndex(null)
     setLevelNotice('')
-    setAnswer('')
+    setJudgingStatus('')
+    setGameReady(false)
+    setSelectedAnswers({})
     setSelectedEvidenceUrl('')
   }
 
   function openLevel(index) {
+    if (raidEnded || timeLeftSeconds <= 0) {
+      setLevelNotice('The raid is over. Restart the raid to open levels again.')
+      window.setTimeout(() => setLevelNotice(''), 2800)
+      return
+    }
+
+    if (!raidStarted) {
+      setLevelNotice('Start the raid clock before opening a level.')
+      window.setTimeout(() => setLevelNotice(''), 2800)
+      return
+    }
+
     if (index > unlockedLevelIndex) {
       setLevelNotice(`Level ${index + 1} is locked. Finish level ${unlockedLevelIndex + 1} first.`)
       window.setTimeout(() => setLevelNotice(''), 2800)
@@ -749,12 +956,15 @@ function App() {
     setLevelNotice('')
     setActiveChamberIndex(index)
     setOpenedLevelIndex(index)
-    setAnswer('')
+    setSelectedAnswers({})
     setSelectedEvidenceUrl(chamber.evidence[0]?.url ?? '')
     setJudgingStatus('')
-    window.setTimeout(() => {
-      document.querySelector('.submission-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 80)
+  }
+
+  function closeLevel() {
+    if (contract.isLoading) return
+    setOpenedLevelIndex(null)
+    setJudgingStatus('')
   }
 
   async function joinRoom() {
@@ -766,6 +976,22 @@ function App() {
       if (Array.isArray(players)) setLeaderboardPlayers(players)
     } catch {
       setRoomJoined(false)
+    }
+  }
+
+  async function createRaidRoom() {
+    if (!walletAddress || roomCreated || !contract.configured) return
+    try {
+      await contract.createRoom(RAID_SEASON.code, RAID_SEASON.roomCode, CHAMBERS.length, RAID_SEASON.xpPool)
+      setRoomCreated(true)
+      setChainSyncStatus('ready')
+      getLeaderboard()
+        .then((players) => {
+          if (Array.isArray(players)) setLeaderboardPlayers(players)
+        })
+        .catch(() => undefined)
+    } catch {
+      setRoomCreated(false)
     }
   }
 
@@ -797,12 +1023,18 @@ function App() {
   }
 
   async function submitChamber() {
+    if (raidEnded || !raidStarted || timeLeftSeconds <= 0) {
+      setJudgingStatus('Raid timer ended. Game over.')
+      return
+    }
+
     if (!activeChamber || openedLevelIndex === null || !walletAddress || !isJoined || !readiness.ready || !contract.configured) return
 
     const roundId = openedLevelIndex
     const pendingKey = `${normalizeWallet(walletAddress)}:${roundId}`
-    const prompt = `${activeChamber.prompt}\nTasks:\n${activeChamber.tasks.join('\n')}`
-    const rubric = activeChamber.scoring.join(',')
+    const answerPacket = buildAnswerPacket(activeChamber, selectedAnswers, selectedEvidenceUrl)
+    const prompt = `${activeChamber.prompt}\nQuestion count: ${activeChamber.questions.length}\nEvidence choices:\n${activeChamber.evidence.map((item) => `- ${item.title}: ${item.url}`).join('\n')}`
+    const rubric = `${activeChamber.scoring.join(',')}\nAnswer key:\n${buildAnswerKey(activeChamber)}`
 
     async function waitForSubmission() {
       for (let attempt = 0; attempt < 45; attempt += 1) {
@@ -824,18 +1056,18 @@ function App() {
         submission = await contract.getSubmission(roundId, walletAddress)
       } catch {
         if (isPendingJudging) {
-          setJudgingStatus('Your answer is already saved. Bradbury has not exposed it to reads yet; click this button again in a minute to run judging.')
+          setJudgingStatus('Your answer is already saved. GenLayer has not exposed it to reads yet; click this button again in a moment to run judging.')
           return
         }
 
-        setJudgingStatus('Saving your answer on Bradbury...')
-        await contract.submitRound(roundId, activeChamber.label, answer.trim(), selectedEvidenceUrl)
+        setJudgingStatus('Saving your answer on GenLayer...')
+        await contract.submitRound(roundId, activeChamber.label, answerPacket, selectedEvidenceUrl)
         setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
         setJudgingStatus('Answer saved. Waiting for accepted state before judging...')
         submission = await waitForSubmission()
 
         if (!submission) {
-          setJudgingStatus('Answer saved on-chain. Bradbury is still catching up; click this button again shortly to run GenLayer judging.')
+          setJudgingStatus('Answer saved on-chain. GenLayer is still catching up; click this button again shortly to run judging.')
           return
         }
       }
@@ -864,7 +1096,7 @@ function App() {
         handle: handle.trim(),
         chamberId: activeChamber.id,
         chamberLabel: activeChamber.label,
-        answer: answer.trim(),
+        answer: answerPacket,
         sourceUrl: selectedEvidenceUrl,
         tasks: activeChamber.tasks,
         scoring: activeChamber.scoring,
@@ -872,7 +1104,7 @@ function App() {
         createdAt: new Date().toISOString(),
       },
     ])
-    setAnswer('')
+    setSelectedAnswers({})
     setSelectedEvidenceUrl('')
     setOpenedLevelIndex(null)
     setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
@@ -895,8 +1127,12 @@ function App() {
       {activeTab === 'play' && (
         <PlayPage
           raidStarted={raidStarted}
+          raidEnded={raidEnded}
           startRaid={startRaid}
+          timeLeftSeconds={timeLeftSeconds}
+          timerToast={timerToast}
           openedLevelIndex={openedLevelIndex}
+          closeLevel={closeLevel}
           openLevel={openLevel}
           nearChamber={nearChamber}
           setNearChamber={setNearChamber}
@@ -911,9 +1147,10 @@ function App() {
           roomCreated={roomCreated}
           roomJoined={isJoined}
           chainSyncStatus={chainSyncStatus}
+          createRoom={createRaidRoom}
           joinRoom={joinRoom}
-          answer={answer}
-          setAnswer={setAnswer}
+          selectedAnswers={selectedAnswers}
+          setSelectedAnswers={setSelectedAnswers}
           selectedEvidenceUrl={selectedEvidenceUrl}
           setSelectedEvidenceUrl={setSelectedEvidenceUrl}
           submitChamber={submitChamber}

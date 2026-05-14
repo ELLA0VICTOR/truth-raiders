@@ -248,7 +248,7 @@ class TruthRaiders(gl.Contract):
         player = PlayerRecord(
             wallet=gl.message.sender_address,
             handle=require_text(handle, "Handle", 32),
-            avatar=require_text(avatar, "Avatar", 32),
+            avatar=clean(avatar, 32) or "scribe",
             xp=u256(0),
             joined_at=gl.message_raw["datetime"],
         )
