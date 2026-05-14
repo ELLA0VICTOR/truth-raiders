@@ -431,6 +431,77 @@ export const CHAMBERS = [
   },
 ]
 
+function stripAnswerFromQuestion(question, index) {
+  return {
+    id: question.id || `q-${index + 1}`,
+    prompt: question.prompt || '',
+    options: Array.isArray(question.options) ? question.options.slice(0, 4) : [],
+  }
+}
+
+export function sanitizeLevelForPlayers(level, index) {
+  return {
+    id: level.id || `level-${index + 1}`,
+    label: level.label || `Level ${index + 1}`,
+    title: level.title || `Level ${index + 1}`,
+    prompt: level.prompt || '',
+    instruction: level.instruction || 'Answer all five questions.',
+    tasks: Array.isArray(level.tasks) ? level.tasks : ['Answer every question.', 'Submit the packet for GenLayer judging.'],
+    artifact: level.artifact || null,
+    evidence: Array.isArray(level.evidence) ? level.evidence : [],
+    questions: Array.isArray(level.questions) ? level.questions.map(stripAnswerFromQuestion) : [],
+    scoring: Array.isArray(level.scoring) ? level.scoring : ['selected choices match the answer key'],
+  }
+}
+
+export function preparePackLevel(level, index) {
+  const cleanLevel = sanitizeLevelForPlayers(level, index)
+  const answerKey = (Array.isArray(level.questions) ? level.questions : [])
+    .map((question, questionIndex) => `Q${questionIndex + 1}=${Number(question.answer || 0) + 1}`)
+    .join('; ')
+  const evidenceUrls = cleanLevel.evidence
+    .map((evidence) => evidence.url)
+    .filter(Boolean)
+    .join('\n')
+  const scoring = cleanLevel.scoring.join(', ')
+
+  return {
+    label: cleanLevel.label,
+    title: cleanLevel.title,
+    prompt: cleanLevel.prompt,
+    levelJson: JSON.stringify(cleanLevel),
+    answerKey,
+    evidenceUrls,
+    scoring,
+    level: cleanLevel,
+  }
+}
+
+export function parsePackJson(rawJson) {
+  const parsed = JSON.parse(rawJson)
+  if (!Array.isArray(parsed) || parsed.length !== 5) {
+    throw new Error('Question pack JSON must be an array of exactly 5 levels.')
+  }
+
+  parsed.forEach((level, levelIndex) => {
+    if (!Array.isArray(level.questions) || level.questions.length !== 5) {
+      throw new Error(`Level ${levelIndex + 1} must contain exactly 5 questions.`)
+    }
+    level.questions.forEach((question, questionIndex) => {
+      if (!Array.isArray(question.options) || question.options.length !== 4) {
+        throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} must contain exactly 4 options.`)
+      }
+      if (!Number.isInteger(question.answer) || question.answer < 0 || question.answer > 3) {
+        throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} needs answer index 0-3.`)
+      }
+    })
+  })
+
+  return parsed
+}
+
+export const DEFAULT_PACK_JSON = JSON.stringify(CHAMBERS, null, 2)
+
 export function buildAnswerPacket(chamber, selectedAnswers, selectedEvidenceUrl) {
   if (!chamber) return ''
 
@@ -469,7 +540,8 @@ export function getReadiness(selectedAnswers, selectedEvidenceUrl, chamber) {
     return { ready: false, completed: 0, required: 5, label: 'Open a level first' }
   }
 
-  const hasEvidence = Boolean(selectedEvidenceUrl)
+  const hasEvidenceOptions = Array.isArray(chamber.evidence) && chamber.evidence.length > 0
+  const hasEvidence = !hasEvidenceOptions || Boolean(selectedEvidenceUrl)
   const answeredCount = chamber.questions.filter((question) => Number.isInteger(selectedAnswers[question.id])).length
   const required = chamber.questions.length
   const ready = hasEvidence && answeredCount === required

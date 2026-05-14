@@ -105,6 +105,26 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
     return readContract('get_room_count')
   }, [readContract])
 
+  const getAdmin = useCallback(() => {
+    return readContract('get_admin')
+  }, [readContract])
+
+  const isModerator = useCallback((user) => {
+    return readContract('is_moderator', [user])
+  }, [readContract])
+
+  const getPackCount = useCallback(() => {
+    return readContract('get_pack_count')
+  }, [readContract])
+
+  const getQuestionPack = useCallback((packId) => {
+    return readContract('get_question_pack', [Number(packId)])
+  }, [readContract])
+
+  const getPackLevel = useCallback((packId, levelIndex) => {
+    return readContract('get_pack_level', [Number(packId), Number(levelIndex)])
+  }, [readContract])
+
   const getSubmission = useCallback(
     (roundId, player) => {
       return readContract('get_submission', [activeRoomId, roundId, player])
@@ -115,6 +135,58 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
   const createRoom = useCallback(
     (seasonCode, roomCode, roundCount, xpPool) => {
       return writeContract('create_room', [seasonCode, roomCode, roundCount, xpPool])
+    },
+    [writeContract]
+  )
+
+  const createRoomFromPack = useCallback(
+    (packId, roomCode, xpPool) => {
+      return writeContract('create_room_from_pack', [Number(packId), roomCode, xpPool])
+    },
+    [writeContract]
+  )
+
+  const addModerator = useCallback(
+    (user) => {
+      return writeContract('admin_add_moderator', [user])
+    },
+    [writeContract]
+  )
+
+  const removeModerator = useCallback(
+    (user) => {
+      return writeContract('admin_remove_moderator', [user])
+    },
+    [writeContract]
+  )
+
+  const createQuestionPack = useCallback(
+    (title, seasonCode) => {
+      return writeContract('create_question_pack', [title, seasonCode])
+    },
+    [writeContract]
+  )
+
+  const setPackLevel = useCallback(
+    (packId, levelIndex, label, title, prompt, levelJson, answerKey, evidenceUrls, scoring) => {
+      return writeContract('set_pack_level', [
+        Number(packId),
+        Number(levelIndex),
+        label,
+        title,
+        prompt,
+        levelJson,
+        answerKey,
+        evidenceUrls,
+        scoring,
+      ])
+    },
+    [writeContract]
+  )
+
+  const publishQuestionPack = useCallback(
+    (packId) => {
+      return writeContract('publish_question_pack', [Number(packId)])
     },
     [writeContract]
   )
@@ -155,8 +227,19 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
     getLeaderboard,
     getLeaderboardById,
     getRoomCount,
+    getAdmin,
+    isModerator,
+    getPackCount,
+    getQuestionPack,
+    getPackLevel,
     getSubmission,
     createRoom,
+    createRoomFromPack,
+    addModerator,
+    removeModerator,
+    createQuestionPack,
+    setPackLevel,
+    publishQuestionPack,
     joinRoom,
     submitRound,
     scoreRound,

@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
-import { AVATARS, CHAMBERS, RAID_SEASON, buildAnswerKey, buildAnswerPacket, getReadiness } from './data/raidContent'
+import {
+  AVATARS,
+  CHAMBERS,
+  DEFAULT_PACK_JSON,
+  RAID_SEASON,
+  buildAnswerKey,
+  buildAnswerPacket,
+  getReadiness,
+  parsePackJson,
+  preparePackLevel,
+} from './data/raidContent'
 import { ensureGenLayerNetwork } from './config/genlayer'
 import './App.css'
 
@@ -10,6 +20,7 @@ const TABS = [
   { id: 'lobby', label: 'Lobby' },
   { id: 'play', label: 'Play' },
   { id: 'leaderboard', label: 'Leaderboard' },
+  { id: 'admin', label: 'Admin' },
   { id: 'faq', label: 'FAQ' },
 ]
 
@@ -361,6 +372,143 @@ function LobbyPage({
   )
 }
 
+function AdminPage({
+  walletAddress,
+  onConnect,
+  adminAddress,
+  isHost,
+  moderatorAddress,
+  setModeratorAddress,
+  questionPacks,
+  packTitle,
+  setPackTitle,
+  packSeason,
+  setPackSeason,
+  packJson,
+  setPackJson,
+  packNotice,
+  onLoadDefaultPack,
+  onCreatePack,
+  onAddModerator,
+  onRemoveModerator,
+  onCreateRoomFromPack,
+  contract,
+}) {
+  return (
+    <section className="admin-page page-reveal">
+      <div className="page-title lobby-title">
+        <div>
+          <span className="kicker">Host console</span>
+          <h1>Admin</h1>
+          <p>Upload official five-level MCQ packs, publish them, and create rooms for community play.</p>
+        </div>
+        {!walletAddress && (
+          <button className="primary-action" type="button" onClick={onConnect}>
+            Connect wallet
+          </button>
+        )}
+      </div>
+
+      <div className="admin-grid">
+        <section className="panel">
+          <div className="panel-heading">
+            <span>Access</span>
+            <span className="fine">{isHost ? 'host enabled' : 'read only'}</span>
+          </div>
+          <div className="rule-row">
+            <span>AD</span>
+            <p>Admin: {adminAddress ? shortAddress(adminAddress) : 'loading'}</p>
+          </div>
+          <div className="rule-row">
+            <span>YOU</span>
+            <p>{walletAddress ? shortAddress(walletAddress) : 'No wallet connected'} / {isHost ? 'admin or moderator' : 'not a host'}</p>
+          </div>
+          <label>
+            Moderator address
+            <input
+              value={moderatorAddress}
+              onChange={(event) => setModeratorAddress(event.target.value)}
+              placeholder="0x..."
+              disabled={!isHost}
+            />
+          </label>
+          <div className="admin-actions">
+            <button className="secondary-action" type="button" onClick={onAddModerator} disabled={!isHost || contract.isLoading}>
+              Add moderator
+            </button>
+            <button className="secondary-action" type="button" onClick={onRemoveModerator} disabled={!isHost || contract.isLoading}>
+              Remove moderator
+            </button>
+          </div>
+        </section>
+
+        <section className="panel pack-editor">
+          <div className="panel-heading">
+            <span>Question pack</span>
+            <span className="fine">5 levels / 25 questions</span>
+          </div>
+          <label>
+            Pack title
+            <input value={packTitle} onChange={(event) => setPackTitle(event.target.value)} disabled={!isHost} />
+          </label>
+          <label>
+            Season code
+            <input value={packSeason} onChange={(event) => setPackSeason(event.target.value)} disabled={!isHost} />
+          </label>
+          <label>
+            Pack JSON
+            <textarea
+              value={packJson}
+              onChange={(event) => setPackJson(event.target.value)}
+              disabled={!isHost}
+              placeholder="Paste an array of 5 levels, each with 5 questions and 4 options."
+            />
+          </label>
+          <div className="admin-actions">
+            <button className="secondary-action" type="button" onClick={onLoadDefaultPack}>
+              Load default pack
+            </button>
+            <button className="primary-action" type="button" onClick={onCreatePack} disabled={!isHost || contract.isLoading}>
+              Create + publish pack
+            </button>
+          </div>
+          {packNotice && <p className="judging-status">{packNotice}</p>}
+        </section>
+      </div>
+
+      <section className="panel pack-list-panel">
+        <div className="panel-heading">
+          <span>Published packs</span>
+          <span className="fine">{questionPacks.length} loaded</span>
+        </div>
+        <div className="pack-list">
+          {questionPacks.length > 0 ? (
+            questionPacks.map((pack) => (
+              <article className="pack-card" key={pack.id}>
+                <span className="kicker">Pack #{pack.id}</span>
+                <h2>{pack.title}</h2>
+                <p>{pack.season_code}</p>
+                <div className="room-meta">
+                  <span>{pack.status}</span>
+                  <span>{pack.level_count} levels</span>
+                </div>
+                <button className="primary-action" type="button" onClick={() => onCreateRoomFromPack(pack.id)} disabled={!isHost || pack.status !== 'published' || contract.isLoading}>
+                  Create room from pack
+                </button>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">
+              <strong>No packs yet</strong>
+              <p>Create and publish a pack before creating official mod-hosted rooms.</p>
+            </div>
+          )}
+        </div>
+      </section>
+    </section>
+  )
+}
+
 function ChallengeModal({
   activeChamber,
   levelNumber,
@@ -448,20 +596,27 @@ function ChallengeModal({
 
           <ArtifactPanel artifact={activeChamber.artifact} />
 
-          <div className="evidence-grid">
-            {activeChamber.evidence.map((evidence) => (
-              <button
-                className={`evidence-card ${selectedEvidenceUrl === evidence.url ? 'is-selected' : ''}`}
-                key={evidence.url}
-                type="button"
-                onClick={() => setSelectedEvidenceUrl(evidence.url)}
-              >
-                <span>{evidence.source}</span>
-                <strong>{evidence.title}</strong>
-                <small>{evidence.clue}</small>
-              </button>
-            ))}
-          </div>
+          {Array.isArray(activeChamber.evidence) && activeChamber.evidence.length > 0 ? (
+            <div className="evidence-grid">
+              {activeChamber.evidence.map((evidence) => (
+                <button
+                  className={`evidence-card ${selectedEvidenceUrl === evidence.url ? 'is-selected' : ''}`}
+                  key={evidence.url || evidence.title}
+                  type="button"
+                  onClick={() => setSelectedEvidenceUrl(evidence.url || '')}
+                >
+                  <span>{evidence.source || 'Source'}</span>
+                  <strong>{evidence.title}</strong>
+                  <small>{evidence.clue || evidence.url}</small>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="optional-evidence-note">
+              <strong>No evidence URL required</strong>
+              <p>This official pack relies on the moderator answer key. GenLayer can still judge the packet without a player-selected source.</p>
+            </div>
+          )}
 
           <div className="score-strip readiness-strip">
             <span>{readiness.label}</span>
@@ -504,6 +659,7 @@ function ChallengeModal({
 }
 
 function PlayPage({
+  chambers,
   selectedRoom,
   raidStarted,
   raidEnded,
@@ -538,7 +694,7 @@ function PlayPage({
   setGameReady,
   readiness,
 }) {
-  const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
+  const activeChamber = openedLevelIndex === null ? null : chambers[openedLevelIndex]
   const roomLabel = selectedRoom?.room_code || `Room #${contract.roomId}`
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
   const clockLabel = formatClock(timeLeftSeconds)
@@ -588,7 +744,7 @@ function PlayPage({
     <section className="play-page page-reveal">
       <div className="play-header">
         <div>
-          <span className="kicker">Level {levelNumber} / {CHAMBERS.length}</span>
+          <span className="kicker">Level {levelNumber} / {chambers.length}</span>
           <h1>The False-Light Catacombs</h1>
         </div>
         <div className="play-controls">
@@ -692,7 +848,7 @@ function PlayPage({
         <div className="panel how-to-play">
           <div className="panel-heading">
             <span>How to play</span>
-            <span className="fine">{CHAMBERS.length} levels</span>
+            <span className="fine">{chambers.length} levels</span>
           </div>
           <div className="rule-row">
             <span>01</span>
@@ -798,7 +954,16 @@ function App() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [selectedRoomId, setSelectedRoomId] = useState(getInitialRoomId)
   const [rooms, setRooms] = useState([])
+  const [roomChambers, setRoomChambers] = useState(CHAMBERS)
   const [roomsStatus, setRoomsStatus] = useState('idle')
+  const [questionPacks, setQuestionPacks] = useState([])
+  const [adminAddress, setAdminAddress] = useState('')
+  const [isHost, setIsHost] = useState(false)
+  const [moderatorAddress, setModeratorAddress] = useState('')
+  const [packTitle, setPackTitle] = useState('Truth Raiders Weekly Pack')
+  const [packSeason, setPackSeason] = useState(RAID_SEASON.code)
+  const [packJson, setPackJson] = useState(DEFAULT_PACK_JSON)
+  const [packNotice, setPackNotice] = useState('')
   const [roomSearch, setRoomSearch] = useState('')
   const [lobbyNotice, setLobbyNotice] = useState('')
   const [raidStarted, setRaidStarted] = useState(false)
@@ -825,7 +990,19 @@ function App() {
   const timerWarningRef = useRef({ warning: false, danger: false, final: false })
 
   const contract = useTruthRaidersContract(walletAddress, selectedRoomId)
-  const { configured: contractConfigured, getRoom, getRoomById, getLeaderboard, getRoomCount, getSubmission } = contract
+  const {
+    configured: contractConfigured,
+    getRoom,
+    getRoomById,
+    getLeaderboard,
+    getRoomCount,
+    getSubmission,
+    getAdmin,
+    isModerator,
+    getPackCount,
+    getQuestionPack,
+    getPackLevel,
+  } = contract
   const selectedRoom = useMemo(
     () => rooms.find((room) => Number(room.id) === Number(selectedRoomId)) || null,
     [rooms, selectedRoomId]
@@ -843,17 +1020,17 @@ function App() {
         .map((submission) => submission.chamberId)
       )
 
-      if (Number(connectedPlayer?.xp || 0) > 0) {
-        completed.add(CHAMBERS[0].id)
+      if (Number(connectedPlayer?.xp || 0) > 0 && roomChambers[0]) {
+        completed.add(roomChambers[0].id)
       }
 
       return completed
     },
-    [connectedPlayer, submissions, walletAddress]
+    [connectedPlayer, roomChambers, submissions, walletAddress]
   )
-  const nextLevelIndex = CHAMBERS.findIndex((chamber) => !completedLevelIds.has(chamber.id))
-  const unlockedLevelIndex = nextLevelIndex === -1 ? CHAMBERS.length - 1 : nextLevelIndex
-  const activeChamber = openedLevelIndex === null ? null : CHAMBERS[openedLevelIndex]
+  const nextLevelIndex = roomChambers.findIndex((chamber) => !completedLevelIds.has(chamber.id))
+  const unlockedLevelIndex = nextLevelIndex === -1 ? roomChambers.length - 1 : nextLevelIndex
+  const activeChamber = openedLevelIndex === null ? null : roomChambers[openedLevelIndex]
   const readiness = getReadiness(selectedAnswers, selectedEvidenceUrl, activeChamber)
 
   const refreshRooms = useCallback(async () => {
@@ -880,6 +1057,27 @@ function App() {
       return []
     }
   }, [contractConfigured, getRoomById, getRoomCount])
+
+  const refreshPacks = useCallback(async () => {
+    if (!contractConfigured) {
+      setQuestionPacks([])
+      return []
+    }
+
+    try {
+      const count = Number(await getPackCount())
+      const ids = Array.from({ length: Math.max(0, count) }, (_, index) => index)
+      const results = await Promise.allSettled(ids.map((packId) => getQuestionPack(packId)))
+      const packs = results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value)
+      setQuestionPacks(packs)
+      return packs
+    } catch {
+      setQuestionPacks([])
+      return []
+    }
+  }, [contractConfigured, getPackCount, getQuestionPack])
 
   useEffect(() => {
     if (!window.ethereum) return undefined
@@ -919,6 +1117,7 @@ function App() {
 
     let cancelled = false
     refreshRooms()
+    refreshPacks()
 
     const interval = window.setInterval(() => {
       if (!cancelled) refreshRooms()
@@ -928,7 +1127,33 @@ function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contractConfigured, refreshRooms])
+  }, [contractConfigured, refreshPacks, refreshRooms])
+
+  useEffect(() => {
+    if (!contractConfigured) return undefined
+
+    let cancelled = false
+
+    async function loadHostStatus() {
+      try {
+        const [adminResult, hostResult] = await Promise.allSettled([
+          getAdmin(),
+          walletAddress ? isModerator(walletAddress) : Promise.resolve(false),
+        ])
+
+        if (cancelled) return
+        if (adminResult.status === 'fulfilled') setAdminAddress(adminResult.value)
+        if (hostResult.status === 'fulfilled') setIsHost(Boolean(hostResult.value))
+      } catch {
+        if (!cancelled) setIsHost(false)
+      }
+    }
+
+    loadHostStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [contractConfigured, getAdmin, isModerator, walletAddress])
 
   useEffect(() => {
     if (!contractConfigured) return undefined
@@ -983,6 +1208,9 @@ function App() {
       setRoomCreated(false)
       setLeaderboardPlayers([])
       setChainSyncStatus('idle')
+      setQuestionPacks([])
+      setIsHost(false)
+      setAdminAddress('')
     }
   }, [contractConfigured])
 
@@ -1007,7 +1235,7 @@ function App() {
     if (!contractConfigured || !walletAddress || !isJoined) return undefined
 
     let cancelled = false
-    Promise.allSettled(CHAMBERS.map((chamber, index) => getSubmission(index, walletAddress).then((submission) => ({ chamber, submission }))))
+    Promise.allSettled(roomChambers.map((chamber, index) => getSubmission(index, walletAddress).then((submission) => ({ chamber, submission }))))
       .then((results) => {
         if (cancelled) return
         const restored = results
@@ -1038,7 +1266,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [contractConfigured, getSubmission, handle, isJoined, progressRefreshKey, walletAddress])
+  }, [contractConfigured, getSubmission, handle, isJoined, progressRefreshKey, roomChambers, walletAddress])
 
   useEffect(() => {
     if (!contractConfigured || !walletAddress || !isJoined) return undefined
@@ -1066,6 +1294,42 @@ function App() {
     setTimeLeftSeconds(RAID_DURATION_SECONDS)
     setTimerToast('')
   }, [selectedRoomId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadRoomPack() {
+      if (!selectedRoom?.has_pack) {
+        setRoomChambers(CHAMBERS)
+        return
+      }
+
+      const levelCount = Number(selectedRoom.round_count || 5)
+      const results = await Promise.allSettled(
+        Array.from({ length: levelCount }, (_, index) => getPackLevel(selectedRoom.pack_id, index))
+      )
+
+      if (cancelled) return
+
+      const levels = results
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => {
+          try {
+            return JSON.parse(result.value.level_json)
+          } catch {
+            return null
+          }
+        })
+        .filter(Boolean)
+
+      setRoomChambers(levels.length > 0 ? levels : CHAMBERS)
+    }
+
+    loadRoomPack()
+    return () => {
+      cancelled = true
+    }
+  }, [getPackLevel, selectedRoom])
 
   useEffect(() => {
     if (!raidStarted || !raidEndsAt) return undefined
@@ -1166,7 +1430,7 @@ function App() {
       return
     }
 
-    const chamber = CHAMBERS[index]
+    const chamber = roomChambers[index]
     setLevelNotice('')
     setActiveChamberIndex(index)
     setOpenedLevelIndex(index)
@@ -1198,13 +1462,81 @@ function App() {
     try {
       const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
       const roomCode = roomCodeForId(nextRoomId)
-      await contract.createRoom(RAID_SEASON.code, roomCode, CHAMBERS.length, RAID_SEASON.xpPool)
+      await contract.createRoom(RAID_SEASON.code, roomCode, roomChambers.length, RAID_SEASON.xpPool)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
       setRoomCreated(true)
       setChainSyncStatus('ready')
     } catch {
       setLobbyNotice('Room creation failed. Try again in a moment.')
+    }
+  }
+
+  async function createRoomFromPack(packId) {
+    if (!walletAddress || !contract.configured) return
+    try {
+      const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
+      const roomCode = roomCodeForId(nextRoomId)
+      await contract.createRoomFromPack(packId, roomCode, RAID_SEASON.xpPool)
+      await refreshRooms()
+      selectRoom(nextRoomId, 'play')
+      setPackNotice(`Room ${roomCode} created from pack #${packId}.`)
+    } catch (error) {
+      setPackNotice(error?.message || 'Room creation from pack failed.')
+    }
+  }
+
+  async function addModerator() {
+    if (!moderatorAddress.trim()) return
+    try {
+      await contract.addModerator(moderatorAddress.trim())
+      setPackNotice('Moderator added.')
+      setModeratorAddress('')
+    } catch (error) {
+      setPackNotice(error?.message || 'Moderator add failed.')
+    }
+  }
+
+  async function removeModerator() {
+    if (!moderatorAddress.trim()) return
+    try {
+      await contract.removeModerator(moderatorAddress.trim())
+      setPackNotice('Moderator removed.')
+      setModeratorAddress('')
+    } catch (error) {
+      setPackNotice(error?.message || 'Moderator remove failed.')
+    }
+  }
+
+  async function createAndPublishPack() {
+    try {
+      const levels = parsePackJson(packJson)
+      const nextPackId = Number(await contract.getPackCount())
+      setPackNotice('Creating question pack...')
+      await contract.createQuestionPack(packTitle.trim(), packSeason.trim())
+
+      for (let index = 0; index < levels.length; index += 1) {
+        const prepared = preparePackLevel(levels[index], index)
+        setPackNotice(`Uploading level ${index + 1} of ${levels.length}...`)
+        await contract.setPackLevel(
+          nextPackId,
+          index,
+          prepared.label,
+          prepared.title,
+          prepared.prompt,
+          prepared.levelJson,
+          prepared.answerKey,
+          prepared.evidenceUrls,
+          prepared.scoring
+        )
+      }
+
+      setPackNotice('Publishing question pack...')
+      await contract.publishQuestionPack(nextPackId)
+      await refreshPacks()
+      setPackNotice(`Question pack #${nextPackId} published.`)
+    } catch (error) {
+      setPackNotice(error?.message || 'Question pack creation failed.')
     }
   }
 
@@ -1351,8 +1683,8 @@ function App() {
     setSelectedAnswers({})
     setSelectedEvidenceUrl('')
     setOpenedLevelIndex(null)
-    setActiveChamberIndex((index) => Math.min(CHAMBERS.length - 1, index + 1))
-    setLevelNotice(`Level ${openedLevelIndex + 1} cleared. Level ${Math.min(CHAMBERS.length, openedLevelIndex + 2)} unlocked.`)
+    setActiveChamberIndex((index) => Math.min(roomChambers.length - 1, index + 1))
+    setLevelNotice(`Level ${openedLevelIndex + 1} cleared. Level ${Math.min(roomChambers.length, openedLevelIndex + 2)} unlocked.`)
     setJudgingStatus('Judging complete. XP has been written on-chain.')
   }
 
@@ -1387,6 +1719,7 @@ function App() {
       )}
       {activeTab === 'play' && (
         <PlayPage
+          chambers={roomChambers}
           selectedRoom={selectedRoom}
           raidStarted={raidStarted}
           raidEnded={raidEnded}
@@ -1423,6 +1756,30 @@ function App() {
         />
       )}
       {activeTab === 'leaderboard' && <LeaderboardPage leaderboardPlayers={leaderboardPlayers} selectedRoom={selectedRoom} />}
+      {activeTab === 'admin' && (
+        <AdminPage
+          walletAddress={walletAddress}
+          onConnect={connectWallet}
+          adminAddress={adminAddress}
+          isHost={isHost}
+          moderatorAddress={moderatorAddress}
+          setModeratorAddress={setModeratorAddress}
+          questionPacks={questionPacks}
+          packTitle={packTitle}
+          setPackTitle={setPackTitle}
+          packSeason={packSeason}
+          setPackSeason={setPackSeason}
+          packJson={packJson}
+          setPackJson={setPackJson}
+          packNotice={packNotice}
+          onLoadDefaultPack={() => setPackJson(DEFAULT_PACK_JSON)}
+          onCreatePack={createAndPublishPack}
+          onAddModerator={addModerator}
+          onRemoveModerator={removeModerator}
+          onCreateRoomFromPack={createRoomFromPack}
+          contract={contract}
+        />
+      )}
       {activeTab === 'faq' && <FaqPage />}
     </main>
   )

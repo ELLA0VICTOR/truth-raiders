@@ -1,12 +1,12 @@
 # Truth Raiders
 
-Truth Raiders is a GenLayer community mini-game where players enter a pixel dungeon, open weekly raid levels, answer evidence-based challenges, and earn XP through Intelligent Contract judging.
+Truth Raiders is a GenLayer community mini-game where players enter a pixel dungeon, open weekly raid levels, answer multiple-choice evidence challenges, and earn XP through Intelligent Contract judging.
 
 The browser game is built with React, Vite, Tailwind, Phaser, GenLayerJS, and Kenney CC0 sprite packs. The GenLayer contract handles the parts normal games cannot fairly settle alone: subjective answer judging, public evidence review, prompt-injection awareness, XP scoring, and leaderboard finalization.
 
 ## Game Loop
 
-Players connect a wallet, create or join the weekly room, start a 5-15 minute raid, and move through five levels:
+Players connect a wallet, create or join a room, start a timed raid, and move through five levels:
 
 - Consensus Trial: correct a false claim about Optimistic Democracy.
 - Web Evidence Hunt: prove how GenLayer can use public web evidence.
@@ -14,20 +14,28 @@ Players connect a wallet, create or join the weekly room, start a 5-15 minute ra
 - Referee Policy Forge: write fair rejection rules for subjective game scoring.
 - XP Verdict Boss: deliver the final leaderboard and XP settlement reasoning.
 
-Each level has multiple tasks, official evidence cards, and a single final answer. Moving near a glowing marker and pressing `Space` reveals the level.
+Each level contains five multiple-choice questions. Moving near a glowing marker and pressing `Space` opens the level modal. Players answer the questions, optionally attach an evidence URL, and submit for GenLayer scoring. The raid timer ends the session if the room runs out of time.
+
+Hosts can also publish official question packs from the Admin tab. A pack has exactly five levels and each level has five questions with four choices. Evidence URLs are optional: if a host does not provide one, the Intelligent Contract can judge from the official answer key and the question context.
 
 ## GenLayer Role
 
 The contract in `contracts/truth_raiders.py` provides:
 
+- `create_question_pack(...)`
+- `set_pack_level(...)`
+- `publish_question_pack(...)`
+- `create_room_from_pack(...)`
 - `create_room(...)`
 - `join_room(...)`
 - `submit_round(...)`
 - `score_round(...)`
 - `finalize_room(...)`
+- `admin_add_moderator(...)`
+- `admin_remove_moderator(...)`
 - `get_leaderboard(...)`
 
-`score_round(...)` uses `gl.vm.run_nondet_unsafe(...)`. The leader fetches public evidence with `gl.nondet.web.get(...)`, judges the answer using `gl.nondet.exec_prompt(...)`, and returns structured JSON. Validators independently rerun the same rubric and accept the result when the core fields are close enough.
+`score_round(...)` uses `gl.vm.run_nondet_unsafe(...)`. For official rooms, the contract loads the published question pack on-chain, uses the pack's answer key and scoring rubric, optionally fetches public evidence with `gl.nondet.web.get(...)`, judges the answer with `gl.nondet.exec_prompt(...)`, and returns structured JSON. Validators independently rerun the same rubric and accept the result when the core fields are close enough.
 
 ## Frontend
 
@@ -35,9 +43,11 @@ The frontend includes:
 
 - Wallet connection.
 - Contract room creation and joining through GenLayerJS.
+- Lobby with room cards, room-code search, and shareable room links.
+- Admin console for moderator management, question-pack upload, publishing, and official room creation.
 - Phaser pixel dungeon with five interactive level markers.
-- Multi-task level prompts.
-- Official GenLayer evidence cards.
+- Multiple-choice level modals.
+- Optional official GenLayer evidence cards.
 - Visual artifact inspection challenge.
 - GenLayer submission and scoring transaction flow.
 - Leaderboard page with no fake players or fake XP.
@@ -47,17 +57,17 @@ The frontend includes:
 Create `.env` from `.env.example` after deploying the contract:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x5665FdEaBb3f46ddE3dF89467505c493BdF4ed41
-VITE_TRUTH_RAIDERS_ROOM_ID=0
-VITE_GENLAYER_NETWORK=bradbury
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x318A28B2d2C108218fb07C32Ada946e49Dc14EdA
+VITE_GENLAYER_NETWORK=studionet
+VITE_GENLAYER_RPC_URL=https://studio.genlayer.com/api
 ```
 
-Supported `VITE_GENLAYER_NETWORK` values are `localnet`, `studionet`, `asimov`, and `bradbury`.
+The frontend is currently configured for StudioNet only. After redeploying `contracts/truth_raiders.py`, replace the address in `.env` and `.env.example`.
 
-Current Bradbury deployment:
+Current StudioNet deployment before the latest admin-pack upgrade:
 
 ```text
-0x5665FdEaBb3f46ddE3dF89467505c493BdF4ed41
+0x318A28B2d2C108218fb07C32Ada946e49Dc14EdA
 ```
 
 ## Assets

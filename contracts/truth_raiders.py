@@ -10,6 +10,9 @@ from genlayer import *
 MAX_ROOM_PLAYERS = 50
 MAX_ROUNDS = 5
 MAX_TEXT = 1200
+MAX_LEVEL_JSON = 6000
+MAX_ANSWER_KEY = 500
+MAX_SCORING = 800
 MAX_URL = 220
 MAX_LEADERBOARD = 50
 MAX_AUDIT = 80
@@ -37,6 +40,16 @@ def validate_url(url: str) -> str:
     if not (result.startswith("https://") or result.startswith("http://")):
         raise gl.vm.UserError(f"{ERROR_EXPECTED} Evidence URL must start with http:// or https://")
     return result
+
+
+def first_url(value: str) -> str:
+    cleaned = clean(value, MAX_TEXT)
+    parts = cleaned.replace(",", "\n").split("\n")
+    for part in parts:
+        candidate = part.strip()
+        if candidate.startswith("https://") or candidate.startswith("http://"):
+            return clean(candidate, MAX_URL)
+    return ""
 
 
 def parse_json(raw_response: typing.Any) -> dict:
@@ -112,6 +125,8 @@ class PlayerRecord:
 @dataclass
 class RoomRecord:
     id: u256
+    pack_id: u256
+    has_pack: bool
     season_code: str
     room_code: str
     host: Address
@@ -142,6 +157,32 @@ class SubmissionRecord:
 
 @allow_storage
 @dataclass
+class QuestionPackRecord:
+    id: u256
+    title: str
+    season_code: str
+    creator: Address
+    status: str
+    level_count: u256
+    created_at: str
+    published_at: str
+
+
+@allow_storage
+@dataclass
+class PackLevelRecord:
+    level_index: u8
+    label: str
+    title: str
+    prompt: str
+    level_json: str
+    answer_key: str
+    evidence_urls: str
+    scoring: str
+
+
+@allow_storage
+@dataclass
 class AuditEvent:
     timestamp: str
     actor: Address
@@ -152,21 +193,47 @@ class AuditEvent:
 
 class TruthRaiders(gl.Contract):
     rooms: TreeMap[u256, RoomRecord]
+    question_packs: TreeMap[u256, QuestionPackRecord]
+    pack_levels: TreeMap[u256, DynArray[PackLevelRecord]]
+    moderators: TreeMap[Address, bool]
     room_players: TreeMap[u256, DynArray[PlayerRecord]]
     room_submissions: TreeMap[u256, DynArray[SubmissionRecord]]
     audit_log: DynArray[AuditEvent]
     next_room_id: u256
+    next_pack_id: u256
     admin: Address
 
     def __init__(self):
         self.admin = gl.message.sender_address
         self.audit_log = []
         self.next_room_id = u256(0)
+        self.next_pack_id = u256(0)
+
+    def _is_admin_or_moderator(self, user: Address) -> bool:
+        if user == self.admin:
+            return True
+        if user in self.moderators:
+            return self.moderators[user]
+        return False
+
+    def _require_admin(self):
+        if gl.message.sender_address != self.admin:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Admin only")
+
+    def _require_admin_or_moderator(self):
+        if not self._is_admin_or_moderator(gl.message.sender_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Admin or moderator only")
 
     def _room_key(self, room_id: int) -> u256:
         key = u256(room_id)
         if key not in self.rooms:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Room does not exist")
+        return key
+
+    def _pack_key(self, pack_id: int) -> u256:
+        key = u256(pack_id)
+        if key not in self.question_packs:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Question pack does not exist")
         return key
 
     def _get_room_players(self, room_id: u256) -> DynArray[PlayerRecord]:
@@ -178,6 +245,19 @@ class TruthRaiders(gl.Contract):
         if room_id in self.room_submissions:
             return self.room_submissions[room_id]
         return []
+
+    def _get_pack_levels(self, pack_id: u256) -> DynArray[PackLevelRecord]:
+        if pack_id in self.pack_levels:
+            return self.pack_levels[pack_id]
+        return []
+
+    def _get_pack_level(self, pack_id: u256, level_index: int) -> PackLevelRecord:
+        levels = self._get_pack_levels(pack_id)
+        for index in range(len(levels)):
+            level = levels[index]
+            if int(level.level_index) == level_index:
+                return level
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} Pack level does not exist")
 
     def _find_player_index(self, players: DynArray[PlayerRecord], player: Address) -> int:
         for index in range(len(players)):
@@ -217,6 +297,8 @@ class TruthRaiders(gl.Contract):
         room_id = self.next_room_id
         room = RoomRecord(
             id=room_id,
+            pack_id=u256(0),
+            has_pack=False,
             season_code=require_text(season_code, "Season code", 96),
             room_code=require_text(room_code, "Room code", 32),
             host=gl.message.sender_address,
@@ -231,6 +313,127 @@ class TruthRaiders(gl.Contract):
         self.rooms[room_id] = room
         self.next_room_id = u256(int(room_id) + 1)
         self._append_audit(gl.message.sender_address, "ROOM_CREATED", room_id, room.room_code)
+
+    @gl.public.write
+    def admin_add_moderator(self, user: Address):
+        self._require_admin()
+        self.moderators[user] = True
+        self._append_audit(gl.message.sender_address, "MODERATOR_ADDED", u256(0), format(user))
+
+    @gl.public.write
+    def admin_remove_moderator(self, user: Address):
+        self._require_admin()
+        self.moderators[user] = False
+        self._append_audit(gl.message.sender_address, "MODERATOR_REMOVED", u256(0), format(user))
+
+    @gl.public.write
+    def create_question_pack(self, title: str, season_code: str):
+        self._require_admin_or_moderator()
+        pack_id = self.next_pack_id
+        pack = QuestionPackRecord(
+            id=pack_id,
+            title=require_text(title, "Pack title", 80),
+            season_code=require_text(season_code, "Season code", 96),
+            creator=gl.message.sender_address,
+            status="draft",
+            level_count=u256(0),
+            created_at=gl.message_raw["datetime"],
+            published_at="",
+        )
+        self.question_packs[pack_id] = pack
+        self.next_pack_id = u256(int(pack_id) + 1)
+        self._append_audit(gl.message.sender_address, "PACK_CREATED", pack_id, pack.title)
+
+    @gl.public.write
+    def set_pack_level(
+        self,
+        pack_id: int,
+        level_index: int,
+        label: str,
+        title: str,
+        prompt: str,
+        level_json: str,
+        answer_key: str,
+        evidence_urls: str,
+        scoring: str,
+    ):
+        self._require_admin_or_moderator()
+        key = self._pack_key(pack_id)
+        pack = self.question_packs[key]
+        if pack.status == "published":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Published packs cannot be edited")
+        if level_index < 0 or level_index >= MAX_ROUNDS:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid level index")
+
+        levels = self._get_pack_levels(key)
+        level = PackLevelRecord(
+            level_index=u8(level_index),
+            label=require_text(label, "Level label", 48),
+            title=require_text(title, "Level title", 96),
+            prompt=require_text(prompt, "Level prompt", MAX_TEXT),
+            level_json=require_text(level_json, "Level JSON", MAX_LEVEL_JSON),
+            answer_key=require_text(answer_key, "Answer key", MAX_ANSWER_KEY),
+            evidence_urls=clean(evidence_urls, MAX_TEXT),
+            scoring=require_text(scoring, "Scoring rubric", MAX_SCORING),
+        )
+
+        replaced = False
+        for index in range(len(levels)):
+            if int(levels[index].level_index) == level_index:
+                levels[index] = level
+                replaced = True
+                break
+
+        if not replaced:
+            if len(levels) >= MAX_ROUNDS:
+                raise gl.vm.UserError(f"{ERROR_EXPECTED} Pack already has max levels")
+            levels.append(level)
+
+        self.pack_levels[key] = levels
+        pack.level_count = u256(len(levels))
+        self.question_packs[key] = pack
+        self._append_audit(gl.message.sender_address, "PACK_LEVEL_SET", key, level.label)
+
+    @gl.public.write
+    def publish_question_pack(self, pack_id: int):
+        self._require_admin_or_moderator()
+        key = self._pack_key(pack_id)
+        pack = self.question_packs[key]
+        if int(pack.level_count) != MAX_ROUNDS:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Pack must contain 5 levels")
+        pack.status = "published"
+        pack.published_at = gl.message_raw["datetime"]
+        self.question_packs[key] = pack
+        self._append_audit(gl.message.sender_address, "PACK_PUBLISHED", key, pack.title)
+
+    @gl.public.write
+    def create_room_from_pack(self, pack_id: int, room_code: str, xp_pool: int):
+        self._require_admin_or_moderator()
+        pack_key = self._pack_key(pack_id)
+        pack = self.question_packs[pack_key]
+        if pack.status != "published":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Pack is not published")
+        if xp_pool <= 0:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} XP pool must be positive")
+
+        room_id = self.next_room_id
+        room = RoomRecord(
+            id=room_id,
+            pack_id=pack_key,
+            has_pack=True,
+            season_code=pack.season_code,
+            room_code=require_text(room_code, "Room code", 32),
+            host=gl.message.sender_address,
+            status="open",
+            player_count=u256(0),
+            round_count=pack.level_count,
+            xp_pool=u256(xp_pool),
+            created_at=gl.message_raw["datetime"],
+            finalized_at="",
+        )
+        self.rooms[room_id] = room
+        self.next_room_id = u256(int(room_id) + 1)
+        self._append_audit(gl.message.sender_address, "ROOM_CREATED_FROM_PACK", room_id, room.room_code)
 
     @gl.public.write
     def join_room(self, room_id: int, handle: str, avatar: str):
@@ -312,15 +515,29 @@ class TruthRaiders(gl.Contract):
         submission_memory = gl.storage.copy_to_memory(submission)
         prompt_text = clean(prompt, MAX_TEXT)
         rubric_text = clean(rubric_csv, 800)
+        evidence_hint_text = ""
+
+        if room_memory.has_pack:
+            pack_level = self._get_pack_level(room_memory.pack_id, round_id)
+            pack_level_memory = gl.storage.copy_to_memory(pack_level)
+            prompt_text = clean(pack_level_memory.prompt, MAX_TEXT)
+            rubric_text = clean(
+                f"{pack_level_memory.scoring}\nOfficial answer key: {pack_level_memory.answer_key}",
+                MAX_SCORING,
+            )
+            evidence_hint_text = clean(pack_level_memory.evidence_urls, MAX_TEXT)
 
         def leader_fn():
             evidence_text = "No evidence URL was provided."
-            if submission_memory.evidence_url != "":
+            evidence_url = submission_memory.evidence_url
+            if evidence_url == "":
+                evidence_url = first_url(evidence_hint_text)
+            if evidence_url != "":
                 try:
-                    response = gl.nondet.web.get(submission_memory.evidence_url)
+                    response = gl.nondet.web.get(evidence_url)
                     evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
                 except Exception:
-                    evidence_text = "Evidence fetch failed. Judge the answer conservatively using the prompt and selected source URL only."
+                    evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
 
             scoring_prompt = f"""You are the Truth Raiders GenLayer referee.
 
@@ -335,6 +552,9 @@ Player answer:
 
 Evidence URL:
 {submission_memory.evidence_url}
+
+Official evidence hints:
+{evidence_hint_text}
 
 Evidence text:
 {evidence_text}
@@ -376,12 +596,15 @@ Respond with JSON only:
                 return False
 
             evidence_text = "No evidence URL was provided."
-            if submission_memory.evidence_url != "":
+            evidence_url = submission_memory.evidence_url
+            if evidence_url == "":
+                evidence_url = first_url(evidence_hint_text)
+            if evidence_url != "":
                 try:
-                    response = gl.nondet.web.get(submission_memory.evidence_url)
+                    response = gl.nondet.web.get(evidence_url)
                     evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
                 except Exception:
-                    evidence_text = "Evidence fetch failed. Judge the answer conservatively using the prompt and selected source URL only."
+                    evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
 
             validator_prompt = f"""You are validating a Truth Raiders game verdict.
 
@@ -398,6 +621,9 @@ Player answer:
 
 Evidence URL:
 {submission_memory.evidence_url}
+
+Official evidence hints:
+{evidence_hint_text}
 
 Evidence text:
 {evidence_text}
@@ -464,6 +690,8 @@ Return JSON only:
         room = self.rooms[key]
         return {
             "id": int(room.id),
+            "pack_id": int(room.pack_id),
+            "has_pack": room.has_pack,
             "season_code": room.season_code,
             "room_code": room.room_code,
             "host": format(room.host),
@@ -493,6 +721,48 @@ Return JSON only:
             )
         result.sort(key=lambda item: item["xp"], reverse=True)
         return result[:MAX_LEADERBOARD]
+
+    @gl.public.view
+    def get_admin(self) -> str:
+        return format(self.admin)
+
+    @gl.public.view
+    def is_moderator(self, user: Address) -> bool:
+        return self._is_admin_or_moderator(user)
+
+    @gl.public.view
+    def get_pack_count(self) -> int:
+        return int(self.next_pack_id)
+
+    @gl.public.view
+    def get_question_pack(self, pack_id: int) -> dict:
+        key = self._pack_key(pack_id)
+        pack = self.question_packs[key]
+        return {
+            "id": int(pack.id),
+            "title": pack.title,
+            "season_code": pack.season_code,
+            "creator": format(pack.creator),
+            "status": pack.status,
+            "level_count": int(pack.level_count),
+            "created_at": pack.created_at,
+            "published_at": pack.published_at,
+        }
+
+    @gl.public.view
+    def get_pack_level(self, pack_id: int, level_index: int) -> dict:
+        key = self._pack_key(pack_id)
+        level = self._get_pack_level(key, level_index)
+        return {
+            "pack_id": pack_id,
+            "level_index": int(level.level_index),
+            "label": level.label,
+            "title": level.title,
+            "prompt": level.prompt,
+            "level_json": level.level_json,
+            "evidence_urls": level.evidence_urls,
+            "scoring": level.scoring,
+        }
 
     @gl.public.view
     def get_submission(self, room_id: int, round_id: int, player: Address) -> dict:
