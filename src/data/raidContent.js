@@ -436,6 +436,7 @@ function stripAnswerFromQuestion(question, index) {
     id: question.id || `q-${index + 1}`,
     prompt: question.prompt || '',
     options: Array.isArray(question.options) ? question.options.slice(0, 4) : [],
+    type: question.type || (Array.isArray(question.options) && question.options.length > 0 ? 'mcq' : 'short'),
   }
 }
 
@@ -457,7 +458,12 @@ export function sanitizeLevelForPlayers(level, index) {
 export function preparePackLevel(level, index) {
   const cleanLevel = sanitizeLevelForPlayers(level, index)
   const answerKey = (Array.isArray(level.questions) ? level.questions : [])
-    .map((question, questionIndex) => `Q${questionIndex + 1}=${Number(question.answer || 0) + 1}`)
+    .map((question, questionIndex) => {
+      if (Array.isArray(question.options) && question.options.length > 0) {
+        return `Q${questionIndex + 1}=${Number(question.answer || 0) + 1}`
+      }
+      return `Q${questionIndex + 1}: ${question.answerText || question.answer || ''}`
+    })
     .join('; ')
   const evidenceUrls = cleanLevel.evidence
     .map((evidence) => evidence.url)
@@ -488,7 +494,14 @@ export function parsePackJson(rawJson) {
       throw new Error(`Level ${levelIndex + 1} must contain exactly 5 questions.`)
     }
     level.questions.forEach((question, questionIndex) => {
-      if (!Array.isArray(question.options) || question.options.length !== 4) {
+      const isShortAnswer = !Array.isArray(question.options) || question.options.length === 0
+      if (isShortAnswer) {
+        if (!String(question.answerText || question.answer || '').trim()) {
+          throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} needs an answer key.`)
+        }
+        return
+      }
+      if (question.options.length !== 4) {
         throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} must contain exactly 4 options.`)
       }
       if (!Number.isInteger(question.answer) || question.answer < 0 || question.answer > 3) {
@@ -505,20 +518,27 @@ export const DEFAULT_PACK_JSON = JSON.stringify(CHAMBERS, null, 2)
 export function buildAnswerPacket(chamber, selectedAnswers, selectedEvidenceUrl) {
   if (!chamber) return ''
 
-  const choices = chamber.questions.map((question, index) => {
-    const selectedIndex = selectedAnswers[question.id]
+  const answers = chamber.questions.map((question, index) => {
+    const value = selectedAnswers[question.id]
+    if (Array.isArray(question.options) && question.options.length > 0) {
+      return {
+        q: index + 1,
+        selected: Number.isInteger(value) ? value + 1 : 0,
+      }
+    }
+
     return {
       q: index + 1,
-      selected: Number.isInteger(selectedIndex) ? selectedIndex + 1 : 0,
+      response: String(value || '').trim().slice(0, 220),
     }
   })
 
   return JSON.stringify(
     {
-      f: 'truth-raiders-mcq-v1',
+      f: 'truth-raiders-answer-v2',
       chamber: chamber.label,
       evidence_url: selectedEvidenceUrl,
-      choices,
+      answers,
     },
     null,
     2
@@ -530,6 +550,7 @@ export function buildAnswerKey(chamber) {
 
   return chamber.questions
     .map((question, index) => {
+      if (!Array.isArray(question.options) || question.options.length === 0) return `Q${index + 1}: short answer`
       return `Q${index + 1}=${question.answer + 1}`
     })
     .join('; ')
@@ -542,7 +563,11 @@ export function getReadiness(selectedAnswers, selectedEvidenceUrl, chamber) {
 
   const hasEvidenceOptions = Array.isArray(chamber.evidence) && chamber.evidence.length > 0
   const hasEvidence = !hasEvidenceOptions || Boolean(selectedEvidenceUrl)
-  const answeredCount = chamber.questions.filter((question) => Number.isInteger(selectedAnswers[question.id])).length
+  const answeredCount = chamber.questions.filter((question) => {
+    const value = selectedAnswers[question.id]
+    if (Array.isArray(question.options) && question.options.length > 0) return Number.isInteger(value)
+    return String(value || '').trim().length >= 2
+  }).length
   const required = chamber.questions.length
   const ready = hasEvidence && answeredCount === required
 

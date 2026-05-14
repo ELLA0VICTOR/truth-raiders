@@ -4,12 +4,10 @@ import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
 import {
   AVATARS,
   CHAMBERS,
-  DEFAULT_PACK_JSON,
   RAID_SEASON,
   buildAnswerKey,
   buildAnswerPacket,
   getReadiness,
-  parsePackJson,
   preparePackLevel,
 } from './data/raidContent'
 import { ensureGenLayerNetwork } from './config/genlayer'
@@ -59,6 +57,79 @@ function sleep(ms) {
 }
 
 const RAID_DURATION_SECONDS = RAID_SEASON.durationMinutes * 60
+
+function createBlankPackBuilder() {
+  return Array.from({ length: 5 }, (_, levelIndex) => ({
+    title: `Level ${levelIndex + 1}`,
+    prompt: 'Answer these community questions in your own words.',
+    evidenceUrl: '',
+    questions: Array.from({ length: 5 }, () => ({ prompt: '', answer: '' })),
+  }))
+}
+
+function createBuilderFromChambers(chambers = CHAMBERS) {
+  return chambers.slice(0, 5).map((chamber, levelIndex) => ({
+    title: chamber.title || `Level ${levelIndex + 1}`,
+    prompt: chamber.prompt || 'Answer these community questions in your own words.',
+    evidenceUrl: chamber.evidence?.[0]?.url || '',
+    questions: Array.from({ length: 5 }, (_, questionIndex) => {
+      const question = chamber.questions?.[questionIndex] || {}
+      const correctOption = Array.isArray(question.options) ? question.options[question.answer] : ''
+      return {
+        prompt: question.prompt || '',
+        answer: correctOption || question.answerText || question.answer || '',
+      }
+    }),
+  }))
+}
+
+function buildLevelsFromPackBuilder(packBuilder) {
+  if (!Array.isArray(packBuilder) || packBuilder.length !== 5) {
+    throw new Error('Question pack must contain exactly 5 levels.')
+  }
+
+  return packBuilder.map((level, levelIndex) => {
+    const title = level.title.trim() || `Level ${levelIndex + 1}`
+    const prompt = level.prompt.trim() || 'Answer these community questions in your own words.'
+    const evidenceUrl = level.evidenceUrl.trim()
+    const questions = level.questions.map((question, questionIndex) => {
+      const questionPrompt = question.prompt.trim()
+      const answerText = question.answer.trim()
+      if (!questionPrompt || !answerText) {
+        throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} needs both a question and an ideal answer.`)
+      }
+
+      return {
+        id: `host-l${levelIndex + 1}-q${questionIndex + 1}`,
+        type: 'short',
+        prompt: questionPrompt,
+        answerText,
+      }
+    })
+
+    return {
+      id: `host-level-${levelIndex + 1}`,
+      label: `Level ${levelIndex + 1}`,
+      title,
+      prompt,
+      instruction: 'Answer all five questions in your own words. Exact wording is not required.',
+      tasks: ['Read each question.', 'Write a concise answer.', 'Submit for GenLayer judging.'],
+      artifact: null,
+      evidence: evidenceUrl
+        ? [
+            {
+              title: 'Moderator reference',
+              source: 'Optional source',
+              url: evidenceUrl,
+              clue: 'Reference material supplied by the host.',
+            },
+          ]
+        : [],
+      questions,
+      scoring: ['semantic match to the official answer key', 'clear reasoning', 'no hallucinated or unrelated claims'],
+    }
+  })
+}
 
 function formatClock(totalSeconds) {
   const safeSeconds = Math.max(0, Number(totalSeconds) || 0)
@@ -384,16 +455,43 @@ function AdminPage({
   setPackTitle,
   packSeason,
   setPackSeason,
-  packJson,
-  setPackJson,
+  packBuilder,
+  setPackBuilder,
   packNotice,
   onLoadDefaultPack,
+  onClearPack,
   onCreatePack,
   onAddModerator,
   onRemoveModerator,
   onCreateRoomFromPack,
   contract,
 }) {
+  const hostDisabledReason = !walletAddress
+    ? 'Connect wallet first'
+    : !isHost
+      ? 'Only the contract admin or an added moderator can publish packs'
+      : contract.isLoading
+        ? 'Contract transaction in progress'
+        : ''
+
+  function updateLevel(levelIndex, patch) {
+    setPackBuilder((current) =>
+      current.map((level, index) => (index === levelIndex ? { ...level, ...patch } : level))
+    )
+  }
+
+  function updateQuestion(levelIndex, questionIndex, patch) {
+    setPackBuilder((current) =>
+      current.map((level, index) => {
+        if (index !== levelIndex) return level
+        return {
+          ...level,
+          questions: level.questions.map((question, qIndex) => (qIndex === questionIndex ? { ...question, ...patch } : question)),
+        }
+      })
+    )
+  }
+
   return (
     <section className="admin-page page-reveal">
       <div className="page-title lobby-title">
@@ -445,7 +543,7 @@ function AdminPage({
         <section className="panel pack-editor">
           <div className="panel-heading">
             <span>Question pack</span>
-            <span className="fine">5 levels / 25 questions</span>
+            <span className="fine">plain questions / semantic answers</span>
           </div>
           <label>
             Pack title
@@ -455,23 +553,72 @@ function AdminPage({
             Season code
             <input value={packSeason} onChange={(event) => setPackSeason(event.target.value)} disabled={!isHost} />
           </label>
-          <label>
-            Pack JSON
-            <textarea
-              value={packJson}
-              onChange={(event) => setPackJson(event.target.value)}
-              disabled={!isHost}
-              placeholder="Paste an array of 5 levels, each with 5 questions and 4 options."
-            />
-          </label>
+          <div className="simple-pack-builder">
+            {packBuilder.map((level, levelIndex) => (
+              <details className="builder-level" key={`level-${levelIndex}`} open={levelIndex === 0}>
+                <summary>
+                  <span>Level {levelIndex + 1}</span>
+                  <small>{level.questions.filter((question) => question.prompt.trim() && question.answer.trim()).length}/5 ready</small>
+                </summary>
+                <label>
+                  Level title
+                  <input
+                    value={level.title}
+                    onChange={(event) => updateLevel(levelIndex, { title: event.target.value })}
+                    disabled={!isHost}
+                  />
+                </label>
+                <label>
+                  Level intro
+                  <input
+                    value={level.prompt}
+                    onChange={(event) => updateLevel(levelIndex, { prompt: event.target.value })}
+                    disabled={!isHost}
+                  />
+                </label>
+                <label>
+                  Evidence URL optional
+                  <input
+                    value={level.evidenceUrl}
+                    onChange={(event) => updateLevel(levelIndex, { evidenceUrl: event.target.value })}
+                    disabled={!isHost}
+                    placeholder="https://docs.genlayer.com/... or leave empty"
+                  />
+                </label>
+                <div className="builder-questions">
+                  {level.questions.map((question, questionIndex) => (
+                    <div className="builder-question" key={`level-${levelIndex}-question-${questionIndex}`}>
+                      <span>Q{questionIndex + 1}</span>
+                      <input
+                        value={question.prompt}
+                        onChange={(event) => updateQuestion(levelIndex, questionIndex, { prompt: event.target.value })}
+                        disabled={!isHost}
+                        placeholder="Question players will answer"
+                      />
+                      <textarea
+                        value={question.answer}
+                        onChange={(event) => updateQuestion(levelIndex, questionIndex, { answer: event.target.value })}
+                        disabled={!isHost}
+                        placeholder="Ideal answer. Validators judge meaning, not exact wording."
+                      />
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
           <div className="admin-actions">
             <button className="secondary-action" type="button" onClick={onLoadDefaultPack}>
               Load default pack
             </button>
-            <button className="primary-action" type="button" onClick={onCreatePack} disabled={!isHost || contract.isLoading}>
+            <button className="secondary-action" type="button" onClick={onClearPack} disabled={!isHost || contract.isLoading}>
+              Clear builder
+            </button>
+            <button className="primary-action" type="button" onClick={onCreatePack} disabled={Boolean(hostDisabledReason)}>
               Create + publish pack
             </button>
           </div>
+          {hostDisabledReason && <small className="submit-hint">{hostDisabledReason}</small>}
           {packNotice && <p className="judging-status">{packNotice}</p>}
         </section>
       </div>
@@ -577,19 +724,29 @@ function ChallengeModal({
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <h3>{question.prompt}</h3>
                 </div>
-                <div className="mcq-options">
-                  {question.options.map((option, optionIndex) => (
-                    <button
-                      className={selectedAnswers[question.id] === optionIndex ? 'is-selected' : ''}
-                      key={option}
-                      type="button"
-                      onClick={() => setSelectedAnswers((current) => ({ ...current, [question.id]: optionIndex }))}
-                    >
-                      <b>{String.fromCharCode(65 + optionIndex)}</b>
-                      <span>{option}</span>
-                    </button>
-                  ))}
-                </div>
+                {Array.isArray(question.options) && question.options.length > 0 ? (
+                  <div className="mcq-options">
+                    {question.options.map((option, optionIndex) => (
+                      <button
+                        className={selectedAnswers[question.id] === optionIndex ? 'is-selected' : ''}
+                        key={option}
+                        type="button"
+                        onClick={() => setSelectedAnswers((current) => ({ ...current, [question.id]: optionIndex }))}
+                      >
+                        <b>{String.fromCharCode(65 + optionIndex)}</b>
+                        <span>{option}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <textarea
+                    className="short-answer-box"
+                    value={selectedAnswers[question.id] || ''}
+                    maxLength={220}
+                    onChange={(event) => setSelectedAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+                    placeholder="Write a concise answer. Same meaning is enough; it does not need to match the host wording."
+                  />
+                )}
               </article>
             ))}
           </div>
@@ -962,7 +1119,7 @@ function App() {
   const [moderatorAddress, setModeratorAddress] = useState('')
   const [packTitle, setPackTitle] = useState('Truth Raiders Weekly Pack')
   const [packSeason, setPackSeason] = useState(RAID_SEASON.code)
-  const [packJson, setPackJson] = useState(DEFAULT_PACK_JSON)
+  const [packBuilder, setPackBuilder] = useState(createBuilderFromChambers)
   const [packNotice, setPackNotice] = useState('')
   const [roomSearch, setRoomSearch] = useState('')
   const [lobbyNotice, setLobbyNotice] = useState('')
@@ -1510,7 +1667,7 @@ function App() {
 
   async function createAndPublishPack() {
     try {
-      const levels = parsePackJson(packJson)
+      const levels = buildLevelsFromPackBuilder(packBuilder)
       const nextPackId = Number(await contract.getPackCount())
       setPackNotice('Creating question pack...')
       await contract.createQuestionPack(packTitle.trim(), packSeason.trim())
@@ -1769,10 +1926,11 @@ function App() {
           setPackTitle={setPackTitle}
           packSeason={packSeason}
           setPackSeason={setPackSeason}
-          packJson={packJson}
-          setPackJson={setPackJson}
+          packBuilder={packBuilder}
+          setPackBuilder={setPackBuilder}
           packNotice={packNotice}
-          onLoadDefaultPack={() => setPackJson(DEFAULT_PACK_JSON)}
+          onLoadDefaultPack={() => setPackBuilder(createBuilderFromChambers())}
+          onClearPack={() => setPackBuilder(createBlankPackBuilder())}
           onCreatePack={createAndPublishPack}
           onAddModerator={addModerator}
           onRemoveModerator={removeModerator}
