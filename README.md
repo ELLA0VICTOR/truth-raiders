@@ -9,7 +9,7 @@ The project is designed around the GenLayer mission brief: short multiplayer roo
 The frontend is configured for GenLayer StudioNet.
 
 ```text
-Contract: 0xedd93D6812f2Ba7ae116Caa166C029D79844C160
+Contract: 0xa34080B700d803d8b501fb1703ae801f355a8061
 Network:  StudioNet
 RPC:      https://studio.genlayer.com/api
 ```
@@ -25,6 +25,7 @@ Only the contract address is expected as a Vite environment variable. StudioNet 
 - Optional evidence URLs for validators and players.
 - Admin and moderator controls for publishing community packs.
 - On-chain XP, progression state, room metadata, submissions, and leaderboard reads.
+- Contract-enforced room timers with adjustable 5-15 minute windows.
 - A Phaser-powered pixel raid map connected to React modals and GenLayer transactions.
 
 ## Gameplay
@@ -32,7 +33,7 @@ Only the contract address is expected as a Vite environment variable. StudioNet 
 1. Connect a wallet.
 2. Open the Lobby tab and create or join a room.
 3. Enter a raider handle.
-4. Start the raid from the Play tab.
+4. Choose a 5-15 minute raid clock when creating the room.
 5. Move the sprite with `WASD` or arrow keys.
 6. Walk to a level relic and press `Space`.
 7. Answer the five questions in the level modal.
@@ -49,6 +50,12 @@ There are five default raid levels:
 - XP Verdict Boss
 
 Each level is intentionally short so a full room can finish in the 5-15 minute window requested by the mission.
+
+## Room Timer Enforcement
+
+Every room has its own on-chain timer. Room creation stores the chosen duration, and `start_room(room_id)` writes the shared start and end time to the contract. `submit_round(...)` only accepts packets while that room is running and before its end timestamp. The frontend countdown is only a visual mirror of the contract state.
+
+Room leaderboards are also room-scoped. Multiple rooms can run independently, and each leaderboard reads XP only for the selected room.
 
 ## Scoring Model
 
@@ -88,11 +95,12 @@ The main contract lives at `contracts/truth_raiders.py`.
 
 Important write methods:
 
-- `create_room(season_code, room_code, round_count, xp_pool)`
+- `create_room(season_code, room_code, round_count, xp_pool, duration_minutes)`
 - `create_question_pack(title, season_code)`
 - `set_pack_level(pack_id, level_index, title, intro, prompt, rubric_csv, evidence_urls_csv, answer_key, question_block, scoring_mode)`
 - `publish_question_pack(pack_id)`
-- `create_room_from_pack(pack_id, room_code, xp_pool)`
+- `create_room_from_pack(pack_id, room_code, xp_pool, duration_minutes)`
+- `start_room(room_id)`
 - `join_room(room_id, handle, avatar)`
 - `submit_round(room_id, round_id, chamber, answer, evidence_url)`
 - `score_round(room_id, round_id, player, prompt, rubric_csv)`
@@ -138,7 +146,7 @@ cp .env.example .env
 Then set:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xedd93D6812f2Ba7ae116Caa166C029D79844C160
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xa34080B700d803d8b501fb1703ae801f355a8061
 ```
 
 If you redeploy the contract, update:
@@ -188,7 +196,7 @@ Install Command:  npm install
 Environment variable:
 
 ```text
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xedd93D6812f2Ba7ae116Caa166C029D79844C160
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xa34080B700d803d8b501fb1703ae801f355a8061
 ```
 
 No serverless backend is required. The browser talks directly to GenLayer StudioNet through `genlayer-js`.
@@ -202,9 +210,11 @@ No serverless backend is required. The browser talks directly to GenLayer Studio
 5. Run `npm run build`.
 6. Create a fresh room from the UI.
 7. Join the room with at least one wallet.
-8. Submit level 1 and confirm XP appears on the leaderboard.
-9. Test that level 2 unlocks after level 1 completion.
-10. If using moderator packs, publish a pack and create a room from it.
+8. Start the global room clock from the host wallet.
+9. Submit level 1 and confirm XP appears on the leaderboard.
+10. Test that level 2 unlocks after level 1 completion.
+11. Confirm submissions are blocked after the room timer ends.
+12. If using moderator packs, publish a pack and create a room from it.
 
 If `genvm-lint` is available locally, run it before redeploying contract changes.
 
@@ -215,12 +225,13 @@ Recommended manual test:
 - Test in one browser profile first with one wallet.
 - Create room.
 - Join room with a handle.
-- Start raid.
+- Start the global room clock from the room host wallet.
 - Submit level 1.
 - Confirm progression unlocks level 2 quickly.
 - Wait for StudioNet reads to catch up and confirm XP on the leaderboard.
 - Repeat with a second wallet in another browser profile.
 - Confirm both wallets appear separately on the leaderboard.
+- Confirm a second room has its own timer and leaderboard.
 - Confirm a duplicate join is handled as "already joined" instead of breaking the flow.
 
 StudioNet can be slow or temporarily busy. The UI keeps local progression responsive and syncs contract state in the background, but leaderboard XP still depends on the contract read becoming available.

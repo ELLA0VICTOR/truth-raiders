@@ -514,7 +514,7 @@ h1 {
 .room-setup-fields {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 0.8fr) minmax(120px, 0.45fr) 120px;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 0.8fr) minmax(110px, 0.45fr) minmax(110px, 0.45fr) 120px;
   gap: 12px;
   border-top: 1px solid rgba(217, 205, 167, 0.12);
   padding-top: 14px;

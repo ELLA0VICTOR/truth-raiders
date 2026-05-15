@@ -206,17 +206,24 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
   )
 
   const createRoom = useCallback(
-    (seasonCode, roomCode, roundCount, xpPool) => {
-      return writeContract('create_room', [seasonCode, roomCode, roundCount, xpPool], { allowPendingSync: true })
+    (seasonCode, roomCode, roundCount, xpPool, durationMinutes) => {
+      return writeContract('create_room', [seasonCode, roomCode, roundCount, xpPool, Number(durationMinutes)], { allowPendingSync: true })
     },
     [writeContract]
   )
 
   const createRoomFromPack = useCallback(
-    (packId, roomCode, xpPool) => {
-      return writeContract('create_room_from_pack', [Number(packId), roomCode, xpPool], { allowPendingSync: true })
+    (packId, roomCode, xpPool, durationMinutes) => {
+      return writeContract('create_room_from_pack', [Number(packId), roomCode, xpPool, Number(durationMinutes)], { allowPendingSync: true })
     },
     [writeContract]
+  )
+
+  const startRoom = useCallback(
+    () => {
+      return writeContract('start_room', [activeRoomId], { allowPendingSync: true })
+    },
+    [activeRoomId, writeContract]
   )
 
   const addModerator = useCallback(
@@ -309,6 +316,7 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
     getSubmissionStatus,
     createRoom,
     createRoomFromPack,
+    startRoom,
     addModerator,
     removeModerator,
     createQuestionPack,

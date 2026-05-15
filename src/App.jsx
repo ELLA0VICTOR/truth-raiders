@@ -58,6 +58,19 @@ function buildRoomUrl(roomId) {
   return url.toString()
 }
 
+function upsertRoom(rooms, nextRoom) {
+  if (!nextRoom || nextRoom.id === undefined) return rooms
+  const nextId = Number(nextRoom.id)
+  const existingIndex = rooms.findIndex((room) => Number(room.id) === nextId)
+  if (existingIndex < 0) {
+    return [...rooms, nextRoom].sort((left, right) => Number(left.id) - Number(right.id))
+  }
+
+  const copy = [...rooms]
+  copy[existingIndex] = nextRoom
+  return copy
+}
+
 function shortAddress(address) {
   const normalized = normalizeWallet(address)
   if (!normalized) return ''
@@ -76,7 +89,22 @@ function sleep(ms) {
   })
 }
 
-const RAID_DURATION_SECONDS = RAID_SEASON.durationMinutes * 60
+const MIN_RAID_MINUTES = 5
+const MAX_RAID_MINUTES = 15
+
+function clampRaidMinutes(value) {
+  const minutes = Number(value)
+  if (!Number.isFinite(minutes)) return RAID_SEASON.durationMinutes
+  return Math.min(MAX_RAID_MINUTES, Math.max(MIN_RAID_MINUTES, Math.trunc(minutes)))
+}
+
+function isValidRaidMinutes(value) {
+  const minutes = Number(value)
+  return Number.isInteger(minutes) && minutes >= MIN_RAID_MINUTES && minutes <= MAX_RAID_MINUTES
+}
+
+const DEFAULT_RAID_MINUTES = clampRaidMinutes(RAID_SEASON.durationMinutes)
+const DEFAULT_RAID_DURATION_SECONDS = DEFAULT_RAID_MINUTES * 60
 const PACK_MODES = {
   short: 'short',
   mcq: 'mcq',
@@ -234,6 +262,28 @@ function formatClock(totalSeconds) {
   const minutes = Math.floor(safeSeconds / 60)
   const seconds = safeSeconds % 60
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function getRoomTimerState(room, fallbackDurationSeconds = DEFAULT_RAID_DURATION_SECONDS) {
+  const durationSeconds = Math.max(0, Number(room?.duration_seconds) || fallbackDurationSeconds)
+  const serverNow = Number(room?.server_time_unix) || Math.floor(Date.now() / 1000)
+  const startedAt = Number(room?.started_at_unix) || 0
+  const endsAt = Number(room?.ends_at_unix) || 0
+  const status = String(room?.status || '').toLowerCase()
+  const hasStarted = status === 'running' || status === 'finalized' || startedAt > 0
+  const remainingSeconds = endsAt > 0 ? Math.max(0, Math.ceil(endsAt - serverNow)) : durationSeconds
+  const isRunning = status === 'running' && remainingSeconds > 0
+  const isEnded = status === 'finalized' || (hasStarted && remainingSeconds <= 0)
+
+  return {
+    durationSeconds,
+    remainingSeconds,
+    status,
+    hasStarted,
+    isRunning,
+    isEnded,
+    endsAtMs: isRunning ? Date.now() + remainingSeconds * 1000 : 0,
+  }
 }
 
 function getTimerPhase(totalSeconds, raidEnded) {
@@ -436,7 +486,7 @@ function OverviewPage({ onPlay, walletAddress, onConnect }) {
           <h2>{RAID_SEASON.roomCode}</h2>
         </div>
         <div className="raid-stats">
-          <span><TimerIcon /> {RAID_SEASON.durationMinutes} min</span>
+          <span><TimerIcon /> {MIN_RAID_MINUTES}-{MAX_RAID_MINUTES} min</span>
           <span><ScrollIcon /> {CHAMBERS.length} levels</span>
           <span><ShieldIcon /> {RAID_SEASON.xpPool} XP pool</span>
         </div>
@@ -524,6 +574,7 @@ function LobbyPage({
             <div className="room-meta">
               <span>{room.player_count} / {RAID_SEASON.maxPlayers} players</span>
               <span>{room.round_count} levels</span>
+              <span>{Math.ceil((Number(room.duration_seconds) || DEFAULT_RAID_DURATION_SECONDS) / 60)} min</span>
               <span>{room.xp_pool} XP</span>
             </div>
             <div className="room-card-actions">
@@ -969,8 +1020,10 @@ function PlayPage({
   setHandle,
   roomCreated,
   roomJoined,
+  canControlRoom,
   roomSettings,
   setRoomSettings,
+  raidDurationMinutes,
   chainSyncStatus,
   createRoom,
   joinRoom,
@@ -986,6 +1039,7 @@ function PlayPage({
 }) {
   const activeChamber = openedLevelIndex === null ? null : chambers[openedLevelIndex]
   const roomLabel = hasSelectedRoom ? selectedRoom?.room_code || `Room #${contract.roomId}` : 'New raid room'
+  const roomStatus = String(selectedRoom?.status || '').toLowerCase()
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
   const clockLabel = formatClock(timeLeftSeconds)
   const timerPhase = getTimerPhase(timeLeftSeconds, raidEnded)
@@ -995,6 +1049,8 @@ function PlayPage({
       ? 'Connect a wallet first.'
       : !hasSelectedRoom
         ? 'Create a new room or select one from the lobby first.'
+      : roomStatus === 'finalized'
+        ? 'This room has ended. Create or select another room.'
       : roomJoined
         ? 'This wallet is already joined from on-chain state.'
       : chainSyncStatus !== 'ready'
@@ -1008,13 +1064,15 @@ function PlayPage({
             : ''
   const canJoinRoom = joinDisabledReason === ''
   const createDisabledReason = !contract.configured
-      ? 'Contract is not configured.'
+    ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
       : !roomSettings.seasonCode.trim()
         ? 'Enter a season code.'
       : !roomSettings.roomCode.trim()
         ? 'Enter a room code.'
+      : !isValidRaidMinutes(Number(roomSettings.durationMinutes))
+        ? `Raid time must be ${MIN_RAID_MINUTES}-${MAX_RAID_MINUTES} minutes.`
       : Number(roomSettings.xpPool) <= 0
         ? 'XP pool must be greater than 0.'
       : chainSyncStatus !== 'ready'
@@ -1031,6 +1089,9 @@ function PlayPage({
     if (chainSyncStatus !== 'ready') return 'Syncing room and player state from GenLayer...'
     if (!hasSelectedRoom || !roomCreated) return 'Create or select a live room first.'
     if (!roomJoined) return 'Join the room before starting the raid.'
+    if (roomStatus === 'running') return 'Raid clock is already running globally.'
+    if (roomStatus === 'finalized') return 'Room ended. Create a new room for another raid.'
+    if (!canControlRoom) return 'Only the room host or a moderator can start this room.'
     if (contract.isLoading) return 'Transaction in progress.'
     return ''
   })()
@@ -1058,7 +1119,7 @@ function PlayPage({
         <div className="play-controls">
           <div className={`raid-clock ${timerPhase}`}>
             <TimerIcon />
-            <span>Raid clock</span>
+            <span>Raid clock / {raidDurationMinutes} min</span>
             <strong>{clockLabel}</strong>
           </div>
           <button
@@ -1068,7 +1129,7 @@ function PlayPage({
             disabled={!canStartRaid}
             title={startDisabledReason || 'Start the raid clock'}
           >
-            {raidStarted || raidEnded ? 'Restart raid' : 'Start raid'}
+            {roomStatus === 'running' || raidStarted ? 'Raid running' : roomStatus === 'finalized' || raidEnded ? 'Raid ended' : 'Start raid'}
           </button>
           {startDisabledReason && <small className="submit-hint">{startDisabledReason}</small>}
         </div>
@@ -1082,6 +1143,8 @@ function PlayPage({
           <strong>
             {!hasSelectedRoom
               ? 'Create a new room or choose one from Lobby'
+              : roomStatus === 'finalized'
+              ? 'Room ended - create a new room'
               : roomJoined
               ? 'Joined and ready'
               : contract.configured
@@ -1126,6 +1189,18 @@ function PlayPage({
                 value={roomSettings.roomCode}
                 onChange={(event) => setRoomSettings((current) => ({ ...current, roomCode: event.target.value }))}
                 placeholder="TRUTH-7C2"
+                disabled={contract.isLoading}
+              />
+            </label>
+            <label>
+              Raid time
+              <input
+                value={roomSettings.durationMinutes}
+                onChange={(event) => setRoomSettings((current) => ({ ...current, durationMinutes: event.target.value.replace(/[^\d]/g, '') }))}
+                placeholder="12"
+                inputMode="numeric"
+                min={MIN_RAID_MINUTES}
+                max={MAX_RAID_MINUTES}
                 disabled={contract.isLoading}
               />
             </label>
@@ -1186,7 +1261,7 @@ function PlayPage({
           <div className="game-over-map">
             <Sigil name="game over seal" />
             <strong>Game over</strong>
-            <p>The raid clock reached zero. Check the leaderboard or restart the room run.</p>
+            <p>The global room clock reached zero. Check the leaderboard or create a new room.</p>
           </div>
         ) : raidStarted ? (
           <TruthRaidersGame
@@ -1328,6 +1403,7 @@ function App() {
   const [roomSettings, setRoomSettings] = useState({
     seasonCode: RAID_SEASON.code,
     roomCode: RAID_SEASON.roomCode,
+    durationMinutes: String(DEFAULT_RAID_MINUTES),
     xpPool: String(RAID_SEASON.xpPool),
   })
   const [roomSearch, setRoomSearch] = useState('')
@@ -1335,7 +1411,7 @@ function App() {
   const [raidStarted, setRaidStarted] = useState(false)
   const [raidEnded, setRaidEnded] = useState(false)
   const [raidEndsAt, setRaidEndsAt] = useState(0)
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState(RAID_DURATION_SECONDS)
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState(DEFAULT_RAID_DURATION_SECONDS)
   const [timerToast, setTimerToast] = useState('')
   const [handle, setHandle] = useState('')
   const [roomCreated, setRoomCreated] = useState(false)
@@ -1374,6 +1450,18 @@ function App() {
   const selectedRoom = useMemo(
     () => hasSelectedRoom ? rooms.find((room) => Number(room.id) === Number(selectedRoomId)) || null : null,
     [hasSelectedRoom, rooms, selectedRoomId]
+  )
+  const raidDurationMinutes = clampRaidMinutes(roomSettings.durationMinutes)
+  const raidDurationSeconds = raidDurationMinutes * 60
+  const selectedRoomTimer = useMemo(
+    () => getRoomTimerState(selectedRoom, raidDurationSeconds),
+    [raidDurationSeconds, selectedRoom]
+  )
+  const displayedRaidDurationMinutes = Math.ceil(selectedRoomTimer.durationSeconds / 60)
+  const canControlRoom = Boolean(
+    walletAddress
+      && selectedRoom?.host
+      && (normalizeWallet(selectedRoom.host) === normalizeWallet(walletAddress) || isHost)
   )
   const connectedPlayer = useMemo(
     () => leaderboardPlayers.find((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress)),
@@ -1446,6 +1534,19 @@ function App() {
       return []
     }
   }, [contractConfigured, getPackCount, getQuestionPack])
+
+  const applyRoomTimer = useCallback((room) => {
+    const timerState = getRoomTimerState(room, raidDurationSeconds)
+    setTimeLeftSeconds(timerState.remainingSeconds)
+    setRaidEndsAt(timerState.endsAtMs)
+    setRaidStarted(timerState.isRunning)
+    setRaidEnded(timerState.isEnded)
+
+    if (timerState.isEnded) {
+      setOpenedLevelIndex(null)
+      setJudgingStatus('')
+    }
+  }, [raidDurationSeconds])
 
   useEffect(() => {
     if (!window.ethereum) return undefined
@@ -1562,6 +1663,8 @@ function App() {
       if (cancelled) return
 
       if (roomResult.status === 'fulfilled') {
+        setRooms((current) => upsertRoom(current, roomResult.value))
+        applyRoomTimer(roomResult.value)
         setRoomCreated(true)
       }
 
@@ -1590,7 +1693,7 @@ function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount, hasSelectedRoom, isRoundFlowActive])
+  }, [applyRoomTimer, contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount, hasSelectedRoom, isRoundFlowActive])
 
   useEffect(() => {
     if (!contractConfigured) {
@@ -1671,6 +1774,10 @@ function App() {
   }, [contractConfigured, isJoined, isRoundFlowActive, walletAddress])
 
   useEffect(() => {
+    if (selectedRoom) applyRoomTimer(selectedRoom)
+  }, [applyRoomTimer, selectedRoom])
+
+  useEffect(() => {
     setRoomCreated(false)
     setRoomJoined(false)
     setLeaderboardPlayers([])
@@ -1683,9 +1790,15 @@ function App() {
     setRaidStarted(false)
     setRaidEnded(false)
     setRaidEndsAt(0)
-    setTimeLeftSeconds(RAID_DURATION_SECONDS)
+    setTimeLeftSeconds(raidDurationSeconds)
     setTimerToast('')
-  }, [selectedRoomId])
+  }, [raidDurationSeconds, selectedRoomId])
+
+  useEffect(() => {
+    if (!raidStarted && !raidEnded) {
+      setTimeLeftSeconds(raidDurationSeconds)
+    }
+  }, [raidDurationSeconds, raidEnded, raidStarted])
 
   useEffect(() => {
     let cancelled = false
@@ -1802,7 +1915,7 @@ function App() {
     window.setTimeout(() => setLevelNotice(''), duration)
   }
 
-  function startRaid() {
+  async function startRaid() {
     if (!contractConfigured) {
       showPlayNotice('Contract is not configured. Set the deployed Truth Raiders address first.')
       return
@@ -1833,21 +1946,62 @@ function App() {
       return
     }
 
-    const endsAt = Date.now() + RAID_DURATION_SECONDS * 1000
+    if (!canControlRoom) {
+      showPlayNotice('Only the room host or a moderator can start this room.')
+      return
+    }
+
+    if (selectedRoom?.status === 'running') {
+      applyRoomTimer(selectedRoom)
+      showPlayNotice('This room clock is already running globally.')
+      return
+    }
+
+    if (selectedRoom?.status === 'finalized') {
+      showPlayNotice('This room has ended. Create a new room for another raid.')
+      return
+    }
+
     timerWarningRef.current = { warning: false, danger: false, final: false }
-    setRaidStarted(true)
-    setRaidEnded(false)
-    setRaidEndsAt(endsAt)
-    setTimeLeftSeconds(RAID_DURATION_SECONDS)
-    setTimerToast(`Raid clock started: ${formatClock(RAID_DURATION_SECONDS)}`)
     setActiveTab('play')
-    setActiveChamberIndex(0)
     setOpenedLevelIndex(null)
     setLevelNotice('')
     setJudgingStatus('')
     setGameReady(false)
     setSelectedAnswers({})
     setSelectedEvidenceUrl('')
+    setTimerToast('Starting the global room clock on-chain...')
+
+    try {
+      await contract.startRoom()
+      let syncedRoom = null
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const room = await getRoom().catch(() => null)
+        if (room) {
+          setRooms((current) => upsertRoom(current, room))
+          applyRoomTimer(room)
+          if (String(room.status).toLowerCase() === 'running') {
+            syncedRoom = room
+            break
+          }
+        }
+        await sleep(2000)
+      }
+
+      await refreshRooms()
+      setActiveChamberIndex(0)
+      setTimerToast(
+        syncedRoom
+          ? `Global raid clock started: ${formatClock(getRoomTimerState(syncedRoom, raidDurationSeconds).remainingSeconds)}`
+          : 'Start transaction sent. GenLayer is syncing the global room clock.'
+      )
+    } catch (error) {
+      setRaidStarted(false)
+      setRaidEnded(false)
+      setRaidEndsAt(0)
+      setTimerToast('')
+      showPlayNotice(error?.message || 'Could not start the global room clock.')
+    }
   }
 
   function openLevel(index) {
@@ -1862,13 +2016,13 @@ function App() {
     }
 
     if (raidEnded || timeLeftSeconds <= 0) {
-      setLevelNotice('The raid is over. Restart the raid to open levels again.')
+      setLevelNotice('The raid is over. Create a new room to play again.')
       window.setTimeout(() => setLevelNotice(''), 2800)
       return
     }
 
     if (!raidStarted) {
-      setLevelNotice('Start the raid clock before opening a level.')
+      setLevelNotice('The room host must start the global raid clock before levels open.')
       window.setTimeout(() => setLevelNotice(''), 2800)
       return
     }
@@ -1924,7 +2078,7 @@ function App() {
         : configuredRoomCode
       const seasonCode = roomSettings.seasonCode.trim() || RAID_SEASON.code
       const xpPool = Math.max(1, Number(roomSettings.xpPool || RAID_SEASON.xpPool))
-      const receipt = await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool)
+      const receipt = await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool, raidDurationMinutes)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
       setRoomCreated(true)
@@ -1942,7 +2096,7 @@ function App() {
     try {
       const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
       const roomCode = roomCodeForId(nextRoomId)
-      const receipt = await contract.createRoomFromPack(packId, roomCode, RAID_SEASON.xpPool)
+      const receipt = await contract.createRoomFromPack(packId, roomCode, RAID_SEASON.xpPool, raidDurationMinutes)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
       setPackNotice(
@@ -2353,8 +2507,10 @@ function App() {
           setHandle={setHandle}
           roomCreated={roomCreated}
           roomJoined={isJoined}
+          canControlRoom={canControlRoom}
           roomSettings={roomSettings}
           setRoomSettings={setRoomSettings}
+          raidDurationMinutes={displayedRaidDurationMinutes}
           chainSyncStatus={chainSyncStatus}
           createRoom={createRaidRoom}
           joinRoom={joinRoom}

@@ -1,6 +1,7 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import typing
 
@@ -9,6 +10,8 @@ from genlayer import *
 
 MAX_ROOM_PLAYERS = 50
 MAX_ROUNDS = 5
+MIN_RAID_MINUTES = 5
+MAX_RAID_MINUTES = 15
 MAX_TEXT = 1200
 MAX_LEVEL_JSON = 6000
 MAX_ANSWER_KEY = 500
@@ -29,6 +32,26 @@ def require_text(value: str, label: str, limit: int) -> str:
     if result == "":
         raise gl.vm.UserError(f"{ERROR_EXPECTED} {label} is required")
     return result
+
+
+def current_unix_timestamp() -> int:
+    raw_datetime = str(gl.message_raw["datetime"]).strip()
+    if raw_datetime.endswith("Z"):
+        raw_datetime = raw_datetime[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw_datetime)
+    except ValueError:
+        raise gl.vm.UserError(f"{ERROR_EXTERNAL} Block timestamp unavailable")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def validate_duration_minutes(value: int) -> int:
+    minutes = int(value)
+    if minutes < MIN_RAID_MINUTES or minutes > MAX_RAID_MINUTES:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} Raid duration must be 5-15 minutes")
+    return minutes
 
 
 def validate_url(url: str) -> str:
@@ -255,7 +278,11 @@ class RoomRecord:
     player_count: u256
     round_count: u256
     xp_pool: u256
+    duration_seconds: u256
     created_at: str
+    started_at: str
+    started_at_unix: u256
+    ends_at_unix: u256
     finalized_at: str
 
 
@@ -408,6 +435,20 @@ class TruthRaiders(gl.Contract):
             log.pop(0)
         self.audit_log = log
 
+    def _display_room_status(self, room: RoomRecord) -> str:
+        if room.status == "running" and int(room.ends_at_unix) > 0 and current_unix_timestamp() >= int(room.ends_at_unix):
+            return "finalized"
+        return room.status
+
+    def _sync_room_timer(self, room_id: u256) -> RoomRecord:
+        room = self.rooms[room_id]
+        if room.status == "running" and int(room.ends_at_unix) > 0 and current_unix_timestamp() >= int(room.ends_at_unix):
+            room.status = "finalized"
+            room.finalized_at = gl.message_raw["datetime"]
+            self.rooms[room_id] = room
+            self._append_audit(gl.message.sender_address, "ROOM_TIMER_ENDED", room_id, room.room_code)
+        return room
+
     def _apply_score(self, room_id: u256, submissions: DynArray[SubmissionRecord], submission_index: int, player: Address, verdict: dict):
         submission = submissions[submission_index]
         score = clamp_score(verdict["score"])
@@ -436,11 +477,12 @@ class TruthRaiders(gl.Contract):
         self._append_audit(gl.message.sender_address, "ROUND_SCORED", room_id, submission.reason)
 
     @gl.public.write
-    def create_room(self, season_code: str, room_code: str, round_count: int, xp_pool: int):
+    def create_room(self, season_code: str, room_code: str, round_count: int, xp_pool: int, duration_minutes: int):
         if round_count <= 0 or round_count > MAX_ROUNDS:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid round count")
         if xp_pool <= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} XP pool must be positive")
+        duration_seconds = validate_duration_minutes(duration_minutes) * 60
 
         room_id = self.next_room_id
         room = RoomRecord(
@@ -450,11 +492,15 @@ class TruthRaiders(gl.Contract):
             season_code=require_text(season_code, "Season code", 96),
             room_code=require_text(room_code, "Room code", 32),
             host=gl.message.sender_address,
-            status="open",
+            status="waiting",
             player_count=u256(0),
             round_count=u256(round_count),
             xp_pool=u256(xp_pool),
+            duration_seconds=u256(duration_seconds),
             created_at=gl.message_raw["datetime"],
+            started_at="",
+            started_at_unix=u256(0),
+            ends_at_unix=u256(0),
             finalized_at="",
         )
 
@@ -555,7 +601,7 @@ class TruthRaiders(gl.Contract):
         self._append_audit(gl.message.sender_address, "PACK_PUBLISHED", key, pack.title)
 
     @gl.public.write
-    def create_room_from_pack(self, pack_id: int, room_code: str, xp_pool: int):
+    def create_room_from_pack(self, pack_id: int, room_code: str, xp_pool: int, duration_minutes: int):
         self._require_admin_or_moderator()
         pack_key = self._pack_key(pack_id)
         pack = self.question_packs[pack_key]
@@ -563,6 +609,7 @@ class TruthRaiders(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Pack is not published")
         if xp_pool <= 0:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} XP pool must be positive")
+        duration_seconds = validate_duration_minutes(duration_minutes) * 60
 
         room_id = self.next_room_id
         room = RoomRecord(
@@ -572,11 +619,15 @@ class TruthRaiders(gl.Contract):
             season_code=pack.season_code,
             room_code=require_text(room_code, "Room code", 32),
             host=gl.message.sender_address,
-            status="open",
+            status="waiting",
             player_count=u256(0),
             round_count=pack.level_count,
             xp_pool=u256(xp_pool),
+            duration_seconds=u256(duration_seconds),
             created_at=gl.message_raw["datetime"],
+            started_at="",
+            started_at_unix=u256(0),
+            ends_at_unix=u256(0),
             finalized_at="",
         )
         self.rooms[room_id] = room
@@ -584,10 +635,33 @@ class TruthRaiders(gl.Contract):
         self._append_audit(gl.message.sender_address, "ROOM_CREATED_FROM_PACK", room_id, room.room_code)
 
     @gl.public.write
+    def start_room(self, room_id: int):
+        key = self._room_key(room_id)
+        room = self._sync_room_timer(key)
+        if room.status == "running":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room already started")
+        if room.status == "finalized":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room already finalized")
+        if gl.message.sender_address != room.host and not self._is_admin_or_moderator(gl.message.sender_address):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room host or moderator only")
+
+        now = current_unix_timestamp()
+        duration_seconds = int(room.duration_seconds)
+        if duration_seconds <= 0:
+            duration_seconds = MIN_RAID_MINUTES * 60
+
+        room.status = "running"
+        room.started_at = gl.message_raw["datetime"]
+        room.started_at_unix = u256(now)
+        room.ends_at_unix = u256(now + duration_seconds)
+        self.rooms[key] = room
+        self._append_audit(gl.message.sender_address, "ROOM_STARTED", key, room.room_code)
+
+    @gl.public.write
     def join_room(self, room_id: int, handle: str, avatar: str):
         key = self._room_key(room_id)
-        room = self.rooms[key]
-        if room.status != "open":
+        room = self._sync_room_timer(key)
+        if room.status not in ["waiting", "running"]:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Room is not open")
 
         players = self._get_room_players(key)
@@ -614,9 +688,11 @@ class TruthRaiders(gl.Contract):
     @gl.public.write
     def submit_round(self, room_id: int, round_id: int, chamber: str, answer: str, evidence_url: str):
         key = self._room_key(room_id)
-        room = self.rooms[key]
-        if room.status != "open":
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room is not open")
+        room = self._sync_room_timer(key)
+        if room.status == "waiting":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room has not started")
+        if room.status != "running":
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Room timer ended")
         if round_id < 0 or round_id >= int(room.round_count):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid round")
 
@@ -830,6 +906,7 @@ Return JSON only:
     def get_room(self, room_id: int) -> dict:
         key = self._room_key(room_id)
         room = self.rooms[key]
+        status = self._display_room_status(room)
         return {
             "id": int(room.id),
             "pack_id": int(room.pack_id),
@@ -837,11 +914,16 @@ Return JSON only:
             "season_code": room.season_code,
             "room_code": room.room_code,
             "host": format(room.host),
-            "status": room.status,
+            "status": status,
             "player_count": int(room.player_count),
             "round_count": int(room.round_count),
             "xp_pool": int(room.xp_pool),
+            "duration_seconds": int(room.duration_seconds),
             "created_at": room.created_at,
+            "started_at": room.started_at,
+            "started_at_unix": int(room.started_at_unix),
+            "ends_at_unix": int(room.ends_at_unix),
+            "server_time_unix": current_unix_timestamp(),
             "finalized_at": room.finalized_at,
         }
 
