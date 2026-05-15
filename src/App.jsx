@@ -1020,6 +1020,16 @@ function PlayPage({
           ? 'Transaction in progress.'
           : ''
   const canCreateRoom = createDisabledReason === ''
+  const startDisabledReason = (() => {
+    if (!contract.configured) return 'Contract is not configured.'
+    if (!walletAddress) return 'Connect a wallet first.'
+    if (chainSyncStatus !== 'ready') return 'Syncing room and player state from GenLayer...'
+    if (!roomCreated) return 'Create or select a live room first.'
+    if (!roomJoined) return 'Join the room before starting the raid.'
+    if (contract.isLoading) return 'Transaction in progress.'
+    return ''
+  })()
+  const canStartRaid = startDisabledReason === ''
   const submitDisabledReason = (() => {
     if (!contract.configured) return 'Contract is not configured.'
     if (!walletAddress) return 'Connect a wallet first.'
@@ -1046,9 +1056,16 @@ function PlayPage({
             <span>Raid clock</span>
             <strong>{clockLabel}</strong>
           </div>
-          <button className="primary-action" type="button" onClick={startRaid}>
+          <button
+            className="primary-action"
+            type="button"
+            onClick={startRaid}
+            disabled={!canStartRaid}
+            title={startDisabledReason || 'Start the raid clock'}
+          >
             {raidStarted || raidEnded ? 'Restart raid' : 'Start raid'}
           </button>
+          {startDisabledReason && <small className="submit-hint">{startDisabledReason}</small>}
         </div>
       </div>
 
@@ -1739,7 +1756,43 @@ function App() {
     window.setTimeout(() => setLobbyNotice(''), 2600)
   }
 
+  function showPlayNotice(message, duration = 3000) {
+    setActiveTab('play')
+    setLevelNotice(message)
+    window.setTimeout(() => setLevelNotice(''), duration)
+  }
+
   function startRaid() {
+    if (!contractConfigured) {
+      showPlayNotice('Contract is not configured. Set the deployed Truth Raiders address first.')
+      return
+    }
+
+    if (!walletAddress) {
+      showPlayNotice('Connect your wallet before starting the raid.')
+      return
+    }
+
+    if (chainSyncStatus !== 'ready') {
+      showPlayNotice('Waiting for the deployed room to finish syncing from GenLayer.')
+      return
+    }
+
+    if (!roomCreated) {
+      showPlayNotice('Create or select a live room before starting the raid.')
+      return
+    }
+
+    if (!isJoined) {
+      showPlayNotice('Join the room with this wallet before starting the raid.')
+      return
+    }
+
+    if (contract.isLoading) {
+      showPlayNotice('A contract transaction is still in progress.')
+      return
+    }
+
     const endsAt = Date.now() + RAID_DURATION_SECONDS * 1000
     timerWarningRef.current = { warning: false, danger: false, final: false }
     setRaidStarted(true)
@@ -1758,6 +1811,16 @@ function App() {
   }
 
   function openLevel(index) {
+    if (!walletAddress) {
+      showPlayNotice('Connect your wallet before opening a level.')
+      return
+    }
+
+    if (!isJoined) {
+      showPlayNotice('Join the room with this wallet before opening a level.')
+      return
+    }
+
     if (raidEnded || timeLeftSeconds <= 0) {
       setLevelNotice('The raid is over. Restart the raid to open levels again.')
       window.setTimeout(() => setLevelNotice(''), 2800)

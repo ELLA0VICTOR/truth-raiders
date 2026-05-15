@@ -205,6 +205,9 @@ h1 {
 
 .primary-action,
 .secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line-strong);
   padding: 13px 18px;
   min-height: 48px;
@@ -1745,23 +1748,104 @@ select:focus {
   .raid-stats {
     grid-template-columns: 1fr;
   }
+
+  .landing-hero {
+    min-height: auto;
+  }
+
+  .try-orb {
+    min-height: 420px;
+  }
+
+  .game-topbar,
+  .level-notice,
+  .game-canvas,
+  .game-over-map {
+    width: min(100%, 960px);
+  }
+}
+
+@media (max-width: 900px) {
+  .site-nav {
+    flex-wrap: wrap;
+    top: 8px;
+  }
+
+  .site-nav nav {
+    order: 3;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .play-page,
+  .leaderboard-page,
+  .faq-page,
+  .overview-page {
+    min-height: auto;
+  }
+
+  .simple-pack-builder {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .pack-editor textarea {
+    min-height: 260px;
+  }
 }
 
 @media (max-width: 720px) {
   .raid-shell {
-    padding: 12px;
+    padding: 8px;
+  }
+
+  .site-nav {
+    top: 0;
+    gap: 10px;
+    padding: 8px;
+    margin: 0 -8px 12px;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .brand-button {
+    justify-content: center;
+    width: 100%;
+    font-size: 18px;
+  }
+
+  .brand-button .sigil {
+    width: 30px;
+    height: 30px;
+  }
+
+  .wallet-button {
+    width: 100%;
+    min-height: 46px;
+  }
+
+  .primary-action,
+  .secondary-action {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
   }
 
   .site-nav,
   .play-header,
   .lobby-title,
-    .play-controls,
-    .packet-foot,
-    .lobby-actions,
-    .admin-actions,
-    .room-card-actions,
-    .room-actions,
-    .game-topbar {
+  .play-controls,
+  .packet-foot,
+  .lobby-actions,
+  .admin-actions,
+  .room-card-actions,
+  .room-actions,
+  .game-topbar,
+  .score-strip,
+  .modal-command-strip {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1773,6 +1857,35 @@ select:focus {
   .site-nav nav {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  .site-nav nav button {
+    min-height: 42px;
+    padding: 9px 8px;
+    font-size: 10px;
+  }
+
+  h1,
+  .play-header h1,
+  .page-title h1 {
+    font-size: clamp(40px, 14vw, 72px);
+    line-height: 0.88;
+    overflow-wrap: anywhere;
+  }
+
+  h2 {
+    overflow-wrap: anywhere;
+  }
+
+  .hero-lede {
+    margin: 22px 0;
+    font-size: 17px;
+  }
+
+  .hero-actions {
+    width: 100%;
   }
 
   .hero-copy,
@@ -1787,7 +1900,168 @@ select:focus {
     padding: 16px;
   }
 
+  .try-orb {
+    min-height: 260px;
+    gap: 14px;
+  }
+
+  .try-orb span {
+    font-size: clamp(28px, 10vw, 42px);
+  }
+
+  .try-orb .sigil {
+    width: 76px;
+    height: 76px;
+  }
+
+  .room-search-panel,
+  .room-console,
+  .room-setup-fields,
+  .room-card,
+  .pack-card,
+  .feature-card,
+  .panel,
+  .faq-card {
+    padding: 14px;
+  }
+
+  .room-card-top,
+  .room-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lobby-actions,
+  .admin-actions,
+  .room-card-actions,
+  .room-actions,
+  .play-controls {
+    justify-content: stretch;
+  }
+
+  .lobby-actions button,
+  .admin-actions button,
+  .room-card-actions button,
+  .room-actions button,
+  .play-controls button {
+    width: 100%;
+  }
+
   .avatar-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-level summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .builder-question {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-question span,
+  .builder-question textarea,
+  .distractor-grid {
+    grid-column: 1;
+  }
+
+  .builder-question span {
+    padding-top: 0;
+  }
+
+  .game-frame {
+    padding: 10px;
+  }
+
+  .game-topbar,
+  .level-notice,
+  .game-canvas,
+  .game-over-map {
+    width: 100%;
+  }
+
+  .game-topbar {
+    gap: 6px;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  .game-canvas,
+  .game-over-map {
+    aspect-ratio: 4 / 3;
+    min-height: 220px;
+  }
+
+  .sleeping-map,
+  .game-over-map {
+    min-height: 220px;
+    padding: 18px;
+  }
+
+  .challenge-modal-backdrop {
+    align-items: stretch;
+    padding: max(10px, env(safe-area-inset-top)) 8px max(14px, env(safe-area-inset-bottom));
+  }
+
+  .challenge-modal {
+    width: 100%;
+    min-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-command-strip {
+    position: relative;
+    top: auto;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .modal-command-strip button {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .modal-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+  }
+
+  .modal-submit-bar {
+    position: relative;
+    bottom: auto;
+    padding: 10px 14px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .challenge-modal h2 {
+    font-size: clamp(30px, 11vw, 44px);
+    line-height: 0.95;
+  }
+
+  .mcq-options button {
+    grid-template-columns: 28px 1fr;
+    min-height: 58px;
+  }
+
+  .evidence-grid {
+    gap: 10px;
+  }
+
+  .leader-row {
+    grid-template-columns: 34px 1fr;
+    align-items: start;
+  }
+
+  .leader-row b {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .prize-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1797,5 +2071,47 @@ select:focus {
 
   .chamber-state {
     grid-column: 2;
+  }
+}
+
+@media (max-width: 420px) {
+  .site-nav nav {
+    grid-template-columns: 1fr;
+  }
+
+  .page-title,
+  .hero-copy,
+  .season-banner,
+  .feature-card,
+  .panel,
+  .contract-panel,
+  .game-frame,
+  .faq-card {
+    padding: 12px;
+  }
+
+  h1,
+  .play-header h1,
+  .page-title h1 {
+    font-size: clamp(36px, 16vw, 58px);
+  }
+
+  .hero-lede,
+  .faq-card p,
+  .page-title p {
+    font-size: 16px;
+  }
+
+  .game-canvas,
+  .game-over-map {
+    min-height: 200px;
+  }
+
+  .mcq-question {
+    padding: 12px;
+  }
+
+  .mcq-options span {
+    font-size: 13px;
   }
 }
