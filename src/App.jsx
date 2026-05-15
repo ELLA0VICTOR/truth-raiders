@@ -1619,7 +1619,7 @@ function App() {
 
     const interval = window.setInterval(() => {
       setProgressRefreshKey((key) => key + 1)
-    }, 45000)
+    }, 30000)
 
     return () => window.clearInterval(interval)
   }, [contractConfigured, isJoined, isRoundFlowActive, walletAddress])
@@ -2104,12 +2104,13 @@ function App() {
       }
 
       if (!submission?.scored && usesInlineScoring) {
-        setJudgingStatus('MCQ answer submitted. Waiting for on-chain XP readback...')
-        debugSubmit('inline-score:waiting', { roundId, player: walletAddress })
-        submission = await waitForScoredSubmission()
-        if (!submission?.scored) {
-          setJudgingStatus('MCQ scoring was submitted, but StudioNet has not exposed the XP result yet. Check leaderboard again shortly.')
-          debugSubmit('inline-score-readback-timeout', { roundId, player: walletAddress })
+        setJudgingStatus('MCQ answer accepted. Unlocking next level while XP syncs in the background.')
+        debugSubmit('inline-score:background-sync', { roundId, player: walletAddress })
+        submission = {
+          exists: true,
+          scored: false,
+          score: undefined,
+          xp_award: undefined,
         }
         setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
       } else if (!submission?.scored) {
@@ -2147,7 +2148,7 @@ function App() {
       const players = submission?.scored ? await getLeaderboard() : []
       debugSubmit('leaderboard-refreshed', { players, submission })
       if (Array.isArray(players) && players.length > 0) setLeaderboardPlayers(players)
-      setProgressRefreshKey((key) => key + 1)
+      window.setTimeout(() => setProgressRefreshKey((key) => key + 1), usesInlineScoring ? 15000 : 0)
     } catch (error) {
       debugSubmitError('flow-failed', error, { roundId, pendingKey })
       console.groupEnd()
@@ -2183,7 +2184,9 @@ function App() {
     setJudgingStatus(
       submission?.scored
         ? `Judging complete. Score ${submission.score}/100, XP +${submission.xp_award}.`
-        : 'Level complete. XP is still syncing from StudioNet; check leaderboard again shortly.'
+        : usesInlineScoring
+          ? 'Level complete. Continue playing while StudioNet syncs XP in the background.'
+          : 'Level complete. XP is still syncing from StudioNet; check leaderboard again shortly.'
     )
     debugSubmit('flow-complete', { nextLevelIndex: Math.min(roomChambers.length - 1, openedLevelIndex + 1) })
     console.groupEnd()
