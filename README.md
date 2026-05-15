@@ -16,7 +16,7 @@ Players connect a wallet, create or join a room, start a timed raid, and move th
 
 Each level contains five multiple-choice questions. Moving near a glowing marker and pressing `Space` opens the level modal. Players answer the questions, optionally attach an evidence URL, and submit for GenLayer scoring. The raid timer ends the session if the room runs out of time.
 
-Hosts can also publish official question packs from the Admin tab. A pack has exactly five levels and each level has five questions with four choices. Evidence URLs are optional: if a host does not provide one, the Intelligent Contract can judge from the official answer key and the question context.
+Hosts can also publish official question packs from the Admin tab. A pack has exactly five levels and each level has five questions. Hosts can choose either multiple-choice mode, where they enter the question and correct answer while the app builds and shuffles the remaining options, or natural-language mode, where players submit written answers that validators judge semantically. Evidence URLs are optional.
 
 ## GenLayer Role
 
@@ -35,7 +35,7 @@ The contract in `contracts/truth_raiders.py` provides:
 - `admin_remove_moderator(...)`
 - `get_leaderboard(...)`
 
-`score_round(...)` uses `gl.vm.run_nondet_unsafe(...)`. For official rooms, the contract loads the published question pack on-chain, uses the pack's answer key and scoring rubric, optionally fetches public evidence with `gl.nondet.web.get(...)`, judges the answer with `gl.nondet.exec_prompt(...)`, and returns structured JSON. Validators independently rerun the same rubric and accept the result when the core fields are close enough.
+`submit_round(...)` scores built-in and official MCQ packs deterministically from the on-chain answer key, then awards XP in the same transaction. For natural-language official packs, `score_round(...)` loads the published prompt, answer key, scoring rubric, and optional evidence URLs, then uses `gl.vm.run_nondet_unsafe(...)`, `gl.nondet.web.get(...)`, and `gl.nondet.exec_prompt(...)` so validators can judge meaning instead of exact wording.
 
 ## Frontend
 
@@ -44,9 +44,9 @@ The frontend includes:
 - Wallet connection.
 - Contract room creation and joining through GenLayerJS.
 - Lobby with room cards, room-code search, and shareable room links.
-- Admin console for moderator management, question-pack upload, publishing, and official room creation.
+- Admin console for moderator management, MCQ or natural-language pack building, publishing, and official room creation.
 - Phaser pixel dungeon with five interactive level markers.
-- Multiple-choice level modals.
+- Multiple-choice and natural-language level modals.
 - Optional official GenLayer evidence cards.
 - Visual artifact inspection challenge.
 - GenLayer submission and scoring transaction flow.
@@ -57,7 +57,7 @@ The frontend includes:
 Create `.env` from `.env.example` after deploying the contract:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x87D8205bf4338034a1234D8De645A955BC8Fd85a
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x2A9E88Bd4C621f563EdAdA79CF0099388038A9C4
 VITE_GENLAYER_NETWORK=studionet
 VITE_GENLAYER_RPC_URL=https://studio.genlayer.com/api
 ```
@@ -67,7 +67,7 @@ The frontend is currently configured for StudioNet only. After redeploying `cont
 Current StudioNet deployment:
 
 ```text
-0x87D8205bf4338034a1234D8De645A955BC8Fd85a
+0x2A9E88Bd4C621f563EdAdA79CF0099388038A9C4
 ```
 
 ## Assets

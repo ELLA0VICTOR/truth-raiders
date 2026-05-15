@@ -76,13 +76,21 @@ function sleep(ms) {
 }
 
 const RAID_DURATION_SECONDS = RAID_SEASON.durationMinutes * 60
+const PACK_MODES = {
+  short: 'short',
+  mcq: 'mcq',
+}
+
+function createBlankQuestion() {
+  return { prompt: '', answer: '', distractors: ['', '', ''] }
+}
 
 function createBlankPackBuilder() {
   return Array.from({ length: 5 }, (_, levelIndex) => ({
     title: `Level ${levelIndex + 1}`,
     prompt: 'Answer these community questions in your own words.',
     evidenceUrl: '',
-    questions: Array.from({ length: 5 }, () => ({ prompt: '', answer: '' })),
+    questions: Array.from({ length: 5 }, createBlankQuestion),
   }))
 }
 
@@ -97,25 +105,87 @@ function createBuilderFromChambers(chambers = CHAMBERS) {
       return {
         prompt: question.prompt || '',
         answer: correctOption || question.answerText || question.answer || '',
+        distractors: Array.isArray(question.options)
+          ? question.options.filter((_, optionIndex) => optionIndex !== question.answer).slice(0, 3)
+          : ['', '', ''],
       }
     }),
   }))
 }
 
-function buildLevelsFromPackBuilder(packBuilder) {
+function deterministicOffset(seed) {
+  let hash = 0
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash + seed.charCodeAt(index) * (index + 1)) % 4
+  }
+  return hash
+}
+
+function uniqueOptionList(options) {
+  const seen = new Set()
+  return options
+    .map((option) => String(option || '').trim())
+    .filter((option) => {
+      const key = option.toLowerCase()
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function generateMcqOptions(questionPrompt, correctAnswer, customDistractors = []) {
+  const cleanPrompt = questionPrompt.trim()
+  const cleanAnswer = correctAnswer.trim()
+  const fallbackDistractors = [
+    'A related claim that misses the key condition.',
+    'An unsupported shortcut that skips verification.',
+    'A statement that sounds plausible but does not answer the question.',
+    'A UI detail rather than the protocol rule.',
+    'A result that depends on trusting one actor blindly.',
+  ]
+  const distractors = uniqueOptionList([...customDistractors, ...fallbackDistractors])
+    .filter((option) => option.toLowerCase() !== cleanAnswer.toLowerCase())
+    .slice(0, 3)
+
+  if (distractors.length < 3) {
+    throw new Error(`Question "${cleanPrompt.slice(0, 36)}..." needs a correct answer that can produce three unique options.`)
+  }
+
+  const options = [cleanAnswer, ...distractors]
+  const offset = deterministicOffset(`${cleanPrompt}:${cleanAnswer}`)
+  return {
+    options: [...options.slice(offset), ...options.slice(0, offset)],
+    answer: offset === 0 ? 0 : 4 - offset,
+  }
+}
+
+function buildLevelsFromPackBuilder(packBuilder, packMode) {
   if (!Array.isArray(packBuilder) || packBuilder.length !== 5) {
     throw new Error('Question pack must contain exactly 5 levels.')
   }
 
+  const isMcq = packMode === PACK_MODES.mcq
+
   return packBuilder.map((level, levelIndex) => {
     const title = level.title.trim() || `Level ${levelIndex + 1}`
-    const prompt = level.prompt.trim() || 'Answer these community questions in your own words.'
+    const prompt = level.prompt.trim() || (isMcq ? 'Answer all five multiple-choice questions.' : 'Answer these community questions in your own words.')
     const evidenceUrl = level.evidenceUrl.trim()
     const questions = level.questions.map((question, questionIndex) => {
       const questionPrompt = question.prompt.trim()
       const answerText = question.answer.trim()
       if (!questionPrompt || !answerText) {
-        throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} needs both a question and an ideal answer.`)
+        throw new Error(`Level ${levelIndex + 1}, question ${questionIndex + 1} needs both a question and an answer.`)
+      }
+
+      if (isMcq) {
+        const generated = generateMcqOptions(questionPrompt, answerText, question.distractors || [])
+        return {
+          id: `host-l${levelIndex + 1}-q${questionIndex + 1}`,
+          type: 'mcq',
+          prompt: questionPrompt,
+          options: generated.options,
+          answer: generated.answer,
+        }
       }
 
       return {
@@ -131,8 +201,10 @@ function buildLevelsFromPackBuilder(packBuilder) {
       label: `Level ${levelIndex + 1}`,
       title,
       prompt,
-      instruction: 'Answer all five questions in your own words. Exact wording is not required.',
-      tasks: ['Read each question.', 'Write a concise answer.', 'Submit for GenLayer judging.'],
+      instruction: isMcq ? 'Choose one answer for each question.' : 'Answer all five questions in your own words. Exact wording is not required.',
+      tasks: isMcq
+        ? ['Read each question.', 'Choose the best answer.', 'Submit for deterministic XP scoring.']
+        : ['Read each question.', 'Write a concise answer.', 'Submit for GenLayer judging.'],
       artifact: null,
       evidence: evidenceUrl
         ? [
@@ -145,9 +217,15 @@ function buildLevelsFromPackBuilder(packBuilder) {
           ]
         : [],
       questions,
-      scoring: ['semantic match to the official answer key', 'clear reasoning', 'no hallucinated or unrelated claims'],
+      scoring: isMcq
+        ? ['selected choices match the moderator answer key']
+        : ['semantic match to the official answer key', 'clear reasoning', 'no hallucinated or unrelated claims'],
     }
   })
+}
+
+function isMcqChamber(chamber) {
+  return Boolean(chamber?.questions?.length) && chamber.questions.every((question) => Array.isArray(question.options) && question.options.length > 0)
 }
 
 function formatClock(totalSeconds) {
@@ -474,6 +552,8 @@ function AdminPage({
   setPackTitle,
   packSeason,
   setPackSeason,
+  packMode,
+  setPackMode,
   packBuilder,
   setPackBuilder,
   packNotice,
@@ -517,7 +597,7 @@ function AdminPage({
         <div>
           <span className="kicker">Host console</span>
           <h1>Admin</h1>
-          <p>Upload official five-level MCQ packs, publish them, and create rooms for community play.</p>
+          <p>Upload official five-level MCQ or natural-language packs, publish them, and create rooms for community play.</p>
         </div>
         {!walletAddress && (
           <button className="primary-action" type="button" onClick={onConnect}>
@@ -562,7 +642,7 @@ function AdminPage({
         <section className="panel pack-editor">
           <div className="panel-heading">
             <span>Question pack</span>
-            <span className="fine">plain questions / semantic answers</span>
+            <span className="fine">{packMode === PACK_MODES.mcq ? 'multiple choice / deterministic xp' : 'plain questions / semantic answers'}</span>
           </div>
           <label>
             Pack title
@@ -571,6 +651,13 @@ function AdminPage({
           <label>
             Season code
             <input value={packSeason} onChange={(event) => setPackSeason(event.target.value)} disabled={!isHost} />
+          </label>
+          <label>
+            Pack format
+            <select value={packMode} onChange={(event) => setPackMode(event.target.value)} disabled={!isHost}>
+              <option value={PACK_MODES.short}>Natural language answers</option>
+              <option value={PACK_MODES.mcq}>Multiple choice answers</option>
+            </select>
           </label>
           <div className="simple-pack-builder">
             {packBuilder.map((level, levelIndex) => (
@@ -618,8 +705,25 @@ function AdminPage({
                         value={question.answer}
                         onChange={(event) => updateQuestion(levelIndex, questionIndex, { answer: event.target.value })}
                         disabled={!isHost}
-                        placeholder="Ideal answer. Validators judge meaning, not exact wording."
+                        placeholder={packMode === PACK_MODES.mcq ? 'Correct answer. Options are generated around this.' : 'Ideal answer. Validators judge meaning, not exact wording.'}
                       />
+                      {packMode === PACK_MODES.mcq && (
+                        <div className="distractor-grid">
+                          {(question.distractors || ['', '', '']).map((distractor, distractorIndex) => (
+                            <input
+                              key={`distractor-${levelIndex}-${questionIndex}-${distractorIndex}`}
+                              value={distractor}
+                              onChange={(event) => {
+                                const distractors = [...(question.distractors || ['', '', ''])]
+                                distractors[distractorIndex] = event.target.value
+                                updateQuestion(levelIndex, questionIndex, { distractors })
+                              }}
+                              disabled={!isHost}
+                              placeholder={`Optional wrong option ${distractorIndex + 1}`}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1029,7 +1133,7 @@ function PlayPage({
             {roomJoined ? 'Room joined' : contract.isLoading ? 'Working...' : 'Join room'}
           </button>
         </div>
-        {joinDisabledReason && <small className="join-hint">{joinDisabledReason}</small>}
+        {!roomJoined && joinDisabledReason && <small className="join-hint">{joinDisabledReason}</small>}
         {contract.error && <small className="join-error">{contract.error}</small>}
       </div>
 
@@ -1187,6 +1291,7 @@ function App() {
   const [moderatorAddress, setModeratorAddress] = useState('')
   const [packTitle, setPackTitle] = useState('Truth Raiders Weekly Pack')
   const [packSeason, setPackSeason] = useState(RAID_SEASON.code)
+  const [packMode, setPackMode] = useState(PACK_MODES.mcq)
   const [packBuilder, setPackBuilder] = useState(createBuilderFromChambers)
   const [packNotice, setPackNotice] = useState('')
   const [roomSettings, setRoomSettings] = useState({
@@ -1689,12 +1794,20 @@ function App() {
   async function joinRoom() {
     if (!walletAddress || !handle.trim() || !roomCreated || !contract.configured) return
     try {
-      await contract.joinRoom(handle.trim())
+      const receipt = await contract.joinRoom(handle.trim())
       setRoomJoined(true)
-      const players = await getLeaderboard()
-      if (Array.isArray(players)) setLeaderboardPlayers(players)
-    } catch {
+      if (receipt?.pendingSync) {
+        setLevelNotice('Join transaction sent. GenLayer is still syncing the room, but this wallet should appear shortly.')
+      }
+      try {
+        const players = await getLeaderboard()
+        if (Array.isArray(players)) setLeaderboardPlayers(players)
+      } catch {
+        setLevelNotice('Join transaction sent. Leaderboard is still syncing from GenLayer.')
+      }
+    } catch (error) {
       setRoomJoined(false)
+      setLevelNotice(error?.message || 'Join failed. Try again in a moment.')
     }
   }
 
@@ -1705,11 +1818,14 @@ function App() {
       const roomCode = roomSettings.roomCode.trim() || roomCodeForId(nextRoomId)
       const seasonCode = roomSettings.seasonCode.trim() || RAID_SEASON.code
       const xpPool = Math.max(1, Number(roomSettings.xpPool || RAID_SEASON.xpPool))
-      await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool)
+      const receipt = await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
       setRoomCreated(true)
       setChainSyncStatus('ready')
+      if (receipt?.pendingSync) {
+        setLevelNotice('Room transaction sent. GenLayer is still syncing it from chain.')
+      }
     } catch {
       setLobbyNotice('Room creation failed. Try again in a moment.')
     }
@@ -1720,10 +1836,14 @@ function App() {
     try {
       const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
       const roomCode = roomCodeForId(nextRoomId)
-      await contract.createRoomFromPack(packId, roomCode, RAID_SEASON.xpPool)
+      const receipt = await contract.createRoomFromPack(packId, roomCode, RAID_SEASON.xpPool)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
-      setPackNotice(`Room ${roomCode} created from pack #${packId}.`)
+      setPackNotice(
+        receipt?.pendingSync
+          ? `Room ${roomCode} was sent from pack #${packId}. GenLayer is still syncing it.`
+          : `Room ${roomCode} created from pack #${packId}.`
+      )
     } catch (error) {
       setPackNotice(error?.message || 'Room creation from pack failed.')
     }
@@ -1753,7 +1873,7 @@ function App() {
 
   async function createAndPublishPack() {
     try {
-      const levels = buildLevelsFromPackBuilder(packBuilder)
+      const levels = buildLevelsFromPackBuilder(packBuilder, packMode)
       const nextPackId = Number(await contract.getPackCount())
       setPackNotice('Creating question pack...')
       await contract.createQuestionPack(packTitle.trim(), packSeason.trim())
@@ -1884,6 +2004,7 @@ function App() {
 
     const roundId = openedLevelIndex
     const pendingKey = `${normalizeWallet(walletAddress)}:${roundId}`
+    const usesInlineScoring = isMcqChamber(activeChamber)
     const answerPacket = buildAnswerPacket(activeChamber, selectedAnswers, selectedEvidenceUrl)
     const prompt = `${activeChamber.prompt}\nQuestion count: ${activeChamber.questions.length}\nEvidence choices:\n${activeChamber.evidence.map((item) => `- ${item.title}: ${item.url}`).join('\n')}`
     const rubric = `${activeChamber.scoring.join(',')}\nAnswer key:\n${buildAnswerKey(activeChamber)}`
@@ -1894,12 +2015,32 @@ function App() {
       pendingKey,
       answerPacket,
       selectedEvidenceUrl,
+      usesInlineScoring,
       promptPreview: prompt.slice(0, 500),
       rubricPreview: rubric.slice(0, 500),
     })
 
+    async function waitForSubmissionExists() {
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        try {
+          const latestSubmission = await contract.getSubmissionStatus(roundId, walletAddress)
+          debugSubmit('submission-readback', { attempt: attempt + 1, latestSubmission })
+          if (latestSubmission?.exists) return latestSubmission
+        } catch (readError) {
+          if (attempt === 0 || (attempt + 1) % 6 === 0) {
+            debugSubmit('submission-readback-not-ready', {
+              attempt: attempt + 1,
+              message: readError?.message,
+            })
+          }
+        }
+        await sleep(5000)
+      }
+      return null
+    }
+
     async function waitForScoredSubmission() {
-      for (let attempt = 0; attempt < 18; attempt += 1) {
+      for (let attempt = 0; attempt < 24; attempt += 1) {
         try {
           const latestSubmission = await contract.getSubmissionStatus(roundId, walletAddress)
           debugSubmit('score-readback', { attempt: attempt + 1, latestSubmission })
@@ -1962,23 +2103,42 @@ function App() {
         }
       }
 
-      if (!submission?.scored) {
-        setJudgingStatus('Running GenLayer judging. This can take 30-60 seconds.')
-        debugSubmit('score-round:start', {
-          roundId,
-          player: walletAddress,
-          promptLength: prompt.length,
-          rubricLength: rubric.length,
-        })
-        await contract.scoreRound(roundId, walletAddress, prompt, rubric)
-        debugSubmit('score-round:executed')
-        setJudgingStatus('Judging transaction accepted. Waiting for XP readback...')
+      if (!submission?.scored && usesInlineScoring) {
+        setJudgingStatus('MCQ answer submitted. Waiting for on-chain XP readback...')
+        debugSubmit('inline-score:waiting', { roundId, player: walletAddress })
         submission = await waitForScoredSubmission()
         if (!submission?.scored) {
-          setJudgingStatus('Judging was submitted, but StudioNet has not exposed the scored result yet. Check leaderboard again shortly.')
-          debugSubmit('score-readback-timeout', { roundId, player: walletAddress })
+          setJudgingStatus('MCQ scoring was submitted, but StudioNet has not exposed the XP result yet. Check leaderboard again shortly.')
+          debugSubmit('inline-score-readback-timeout', { roundId, player: walletAddress })
         }
         setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
+      } else if (!submission?.scored) {
+        if (!submission?.exists) {
+          setJudgingStatus('Answer saved. Waiting for GenLayer state before judging...')
+          submission = await waitForSubmissionExists()
+        }
+        if (!submission?.exists) {
+          setJudgingStatus('Answer transaction was sent, but StudioNet has not exposed the saved answer yet. Try judging again shortly.')
+          debugSubmit('submission-readback-timeout', { roundId, player: walletAddress })
+          setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
+        } else {
+          setJudgingStatus('Running GenLayer judging. This can take 30-60 seconds.')
+          debugSubmit('score-round:start', {
+            roundId,
+            player: walletAddress,
+            promptLength: prompt.length,
+            rubricLength: rubric.length,
+          })
+          await contract.scoreRound(roundId, walletAddress, prompt, rubric)
+          debugSubmit('score-round:executed')
+          setJudgingStatus('Judging transaction accepted. Waiting for XP readback...')
+          submission = await waitForScoredSubmission()
+          if (!submission?.scored) {
+            setJudgingStatus('Judging was submitted, but StudioNet has not exposed the scored result yet. Check leaderboard again shortly.')
+            debugSubmit('score-readback-timeout', { roundId, player: walletAddress })
+          }
+          setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
+        }
       } else {
         setJudgingStatus('This level was already judged. Unlocking the next level...')
         debugSubmit('score-round:already-scored', { scoredAt: submission.scored_at })
@@ -2112,10 +2272,15 @@ function App() {
           setPackTitle={setPackTitle}
           packSeason={packSeason}
           setPackSeason={setPackSeason}
+          packMode={packMode}
+          setPackMode={setPackMode}
           packBuilder={packBuilder}
           setPackBuilder={setPackBuilder}
           packNotice={packNotice}
-          onLoadDefaultPack={() => setPackBuilder(createBuilderFromChambers())}
+          onLoadDefaultPack={() => {
+            setPackMode(PACK_MODES.mcq)
+            setPackBuilder(createBuilderFromChambers())
+          }}
           onClearPack={() => setPackBuilder(createBlankPackBuilder())}
           onCreatePack={createAndPublishPack}
           onAddModerator={addModerator}

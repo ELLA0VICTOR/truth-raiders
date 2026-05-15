@@ -4,6 +4,20 @@ import { ExecutionResult, TransactionStatus } from 'genlayer-js/types'
 import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_NETWORK, GENLAYER_RPC_URL, ensureGenLayerNetwork, isContractConfigured } from '../config/genlayer'
 
 const DEBUG_PREFIX = '[TruthRaiders:contract]'
+const RECEIPT_WAIT_INTERVAL_MS = 3000
+const RECEIPT_WAIT_RETRIES = 45
+
+function isReceiptWaitTimeout(error) {
+  return /Timed out waiting for transaction/i.test(error?.message || '')
+}
+
+function getFriendlyContractError(error, functionName) {
+  if (isReceiptWaitTimeout(error)) {
+    return 'Transaction was sent. GenLayer is still syncing it, so the app will refresh from on-chain state shortly.'
+  }
+
+  return error?.message || `Contract call failed: ${functionName}`
+}
 
 function summarizeArg(arg) {
   if (typeof arg === 'string' && arg.length > 180) {
@@ -39,11 +53,12 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
   }, [configured, walletAddress])
 
   const writeContract = useCallback(
-    async (functionName, args = []) => {
+    async (functionName, args = [], options = {}) => {
       if (!writeClient || !readClient) {
         throw new Error('Truth Raiders contract is not configured or wallet is not connected.')
       }
 
+      const { allowPendingSync = false } = options
       setIsLoading(true)
       setError('')
       try {
@@ -70,11 +85,29 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
         console.info('transaction hash', hash)
 
         console.info('waiting for ACCEPTED receipt')
-        const receipt = await readClient.waitForTransactionReceipt({
-          hash,
-          status: TransactionStatus.ACCEPTED,
-          fullTransaction: false,
-        })
+        let receipt
+        try {
+          receipt = await readClient.waitForTransactionReceipt({
+            hash,
+            status: TransactionStatus.ACCEPTED,
+            interval: RECEIPT_WAIT_INTERVAL_MS,
+            retries: RECEIPT_WAIT_RETRIES,
+            fullTransaction: false,
+          })
+        } catch (receiptError) {
+          if (!isReceiptWaitTimeout(receiptError)) throw receiptError
+          if (!allowPendingSync) throw receiptError
+          console.warn('transaction wait timed out; treating as sent and letting state sync verify it', {
+            hash,
+            functionName,
+            message: receiptError?.message,
+          })
+          receipt = {
+            hash,
+            pendingSync: true,
+            message: 'Transaction sent. GenLayer is still processing it.',
+          }
+        }
         console.info('receipt', receipt)
 
         if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR) {
@@ -90,7 +123,7 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
         console.groupEnd()
         return receipt
       } catch (contractError) {
-        const message = contractError?.message || `Contract call failed: ${functionName}`
+        const message = getFriendlyContractError(contractError, functionName)
         console.error(`${DEBUG_PREFIX} write failed:${functionName}`, contractError)
         console.groupEnd()
         setError(message)
@@ -99,7 +132,7 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
         setIsLoading(false)
       }
     },
-    [readClient, writeClient]
+    [activeRoomId, readClient, walletAddress, writeClient]
   )
 
   const readContract = useCallback(
@@ -174,14 +207,14 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
 
   const createRoom = useCallback(
     (seasonCode, roomCode, roundCount, xpPool) => {
-      return writeContract('create_room', [seasonCode, roomCode, roundCount, xpPool])
+      return writeContract('create_room', [seasonCode, roomCode, roundCount, xpPool], { allowPendingSync: true })
     },
     [writeContract]
   )
 
   const createRoomFromPack = useCallback(
     (packId, roomCode, xpPool) => {
-      return writeContract('create_room_from_pack', [Number(packId), roomCode, xpPool])
+      return writeContract('create_room_from_pack', [Number(packId), roomCode, xpPool], { allowPendingSync: true })
     },
     [writeContract]
   )
@@ -233,7 +266,7 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
 
   const joinRoom = useCallback(
     (handle) => {
-      return writeContract('join_room', [activeRoomId, handle, 'scribe'])
+      return writeContract('join_room', [activeRoomId, handle, 'scribe'], { allowPendingSync: true })
     },
     [activeRoomId, writeContract]
   )

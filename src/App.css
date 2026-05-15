@@ -930,6 +930,18 @@ h1 {
   line-height: 1.5;
 }
 
+.distractor-grid {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.distractor-grid input {
+  padding: 11px;
+  font-size: 13px;
+}
+
 .pack-list-panel {
   margin-top: 18px;
 }
@@ -1490,7 +1502,8 @@ label {
 }
 
 textarea,
-input {
+input,
+select {
   width: 100%;
   border: 1px solid var(--line);
   color: var(--bone);
@@ -1508,7 +1521,8 @@ textarea {
 }
 
 textarea:focus,
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--gold);
 }
 
@@ -1714,6 +1728,10 @@ input:focus {
   }
 
   .mcq-options {
+    grid-template-columns: 1fr;
+  }
+
+  .distractor-grid {
     grid-template-columns: 1fr;
   }
 

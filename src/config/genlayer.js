@@ -1,6 +1,6 @@
 import { studionet } from 'genlayer-js/chains'
 
-const DEFAULT_STUDIO_CONTRACT = '0x87D8205bf4338034a1234D8De645A955BC8Fd85a'
+const DEFAULT_STUDIO_CONTRACT = '0x2A9E88Bd4C621f563EdAdA79CF0099388038A9C4'
 const STUDIO_RPC_URL = 'https://studio.genlayer.com/api'
 
 export const CONTRACT_ADDRESS = import.meta.env.VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS || DEFAULT_STUDIO_CONTRACT

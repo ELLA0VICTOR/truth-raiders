@@ -171,6 +171,67 @@ def score_default_mcq(answer: str, round_id: int) -> dict:
     }
 
 
+def mcq_key_answer(answer_key: str, question_index: int) -> int:
+    target = f"Q{question_index + 1}="
+    for raw_part in answer_key.split(";"):
+        part = raw_part.strip()
+        if part.startswith(target):
+            try:
+                return int(part.replace(target, "").strip()[:1])
+            except ValueError:
+                return 0
+    return 0
+
+
+def is_mcq_answer_key(answer_key: str) -> bool:
+    for index in range(5):
+        answer = mcq_key_answer(answer_key, index)
+        if answer < 1 or answer > 4:
+            return False
+    return True
+
+
+def score_pack_mcq(answer: str, answer_key: str) -> dict:
+    try:
+        parsed = parse_json(answer)
+        answers = parsed.get("answers", [])
+    except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return {
+            "score": 0,
+            "accepted": False,
+            "reason": "Answer packet could not be parsed.",
+            "xp_award": 0,
+        }
+
+    correct = 0
+    answered = 0
+    for index in range(5):
+        expected = mcq_key_answer(answer_key, index)
+        selected = 0
+        if index < len(answers):
+            try:
+                selected = int(answers[index].get("selected", 0))
+            except (AttributeError, TypeError, ValueError):
+                selected = 0
+        if selected > 0:
+            answered += 1
+        if expected > 0 and selected == expected:
+            correct += 1
+
+    score = correct * 20
+    accepted = score >= 60
+    reason = f"{correct}/5 correct moderator MCQ answers."
+    if answered < 5:
+        reason = f"{correct}/5 correct; only {answered}/5 answered."
+
+    return {
+        "score": score,
+        "accepted": accepted,
+        "reason": reason,
+        "xp_award": score if accepted else 0,
+    }
+
+
 @allow_storage
 @dataclass
 class PlayerRecord:
@@ -346,6 +407,33 @@ class TruthRaiders(gl.Contract):
         while len(log) > MAX_AUDIT:
             log.pop(0)
         self.audit_log = log
+
+    def _apply_score(self, room_id: u256, submissions: DynArray[SubmissionRecord], submission_index: int, player: Address, verdict: dict):
+        submission = submissions[submission_index]
+        score = clamp_score(verdict["score"])
+        xp_award = clamp_score(verdict["xp_award"])
+        accepted = bool(verdict["accepted"])
+
+        if not accepted:
+            xp_award = 0
+
+        submission.score = u8(score)
+        submission.xp_award = u256(xp_award)
+        submission.accepted = accepted
+        submission.reason = clean(str(verdict["reason"]), 240)
+        submission.scored_at = gl.message_raw["datetime"]
+        submissions[submission_index] = submission
+        self.room_submissions[room_id] = submissions
+
+        players = self._get_room_players(room_id)
+        player_index = self._find_player_index(players, player)
+        if player_index < 0:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Player has not joined")
+        player_record = players[player_index]
+        player_record.xp = u256(int(player_record.xp) + xp_award)
+        players[player_index] = player_record
+        self.room_players[room_id] = players
+        self._append_audit(gl.message.sender_address, "ROUND_SCORED", room_id, submission.reason)
 
     @gl.public.write
     def create_room(self, season_code: str, room_code: str, round_count: int, xp_pool: int):
@@ -556,8 +644,21 @@ class TruthRaiders(gl.Contract):
         )
 
         submissions.append(submission)
+        submission_index = len(submissions) - 1
         self.room_submissions[key] = submissions
         self._append_audit(gl.message.sender_address, "ROUND_SUBMITTED", key, submission.chamber)
+
+        verdict = None
+        if room.has_pack:
+            pack_level = self._get_pack_level(room.pack_id, round_id)
+            pack_level_memory = gl.storage.copy_to_memory(pack_level)
+            if is_mcq_answer_key(pack_level_memory.answer_key):
+                verdict = score_pack_mcq(submission.answer, pack_level_memory.answer_key)
+        else:
+            verdict = score_default_mcq(submission.answer, round_id)
+
+        if verdict is not None:
+            self._apply_score(key, submissions, submission_index, gl.message.sender_address, verdict)
 
     @gl.public.write
     def score_round(self, room_id: int, round_id: int, player: Address, prompt: str, rubric_csv: str):
@@ -588,19 +689,22 @@ class TruthRaiders(gl.Contract):
             )
             evidence_hint_text = clean(pack_level_memory.evidence_urls, MAX_TEXT)
 
-            def leader_fn():
-                evidence_text = "No evidence URL was provided."
-                evidence_url = submission_memory.evidence_url
-                if evidence_url == "":
-                    evidence_url = first_url(evidence_hint_text)
-                if evidence_url != "":
-                    try:
-                        response = gl.nondet.web.get(evidence_url)
-                        evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
-                    except Exception:
-                        evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
+            if is_mcq_answer_key(pack_level_memory.answer_key):
+                verdict = score_pack_mcq(submission_memory.answer, pack_level_memory.answer_key)
+            else:
+                def leader_fn():
+                    evidence_text = "No evidence URL was provided."
+                    evidence_url = submission_memory.evidence_url
+                    if evidence_url == "":
+                        evidence_url = first_url(evidence_hint_text)
+                    if evidence_url != "":
+                        try:
+                            response = gl.nondet.web.get(evidence_url)
+                            evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
+                        except Exception:
+                            evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
 
-                scoring_prompt = f"""You are the Truth Raiders GenLayer referee.
+                    scoring_prompt = f"""You are the Truth Raiders GenLayer referee.
 
 Room: {room_memory.room_code}
 Season: {room_memory.season_code}
@@ -634,40 +738,40 @@ Respond with JSON only:
   "reason": "Concise judging reason.",
   "xp_award": 0
 }}"""
-                try:
-                    raw_response = gl.nondet.exec_prompt(scoring_prompt, response_format="json")
-                    return normalize_score(raw_response)
-                except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
-                    return {
-                        "score": 0,
-                        "accepted": False,
-                        "reason": "The referee could not parse a safe scoring result.",
-                        "xp_award": 0,
-                    }
-
-            def validator_fn(leader_result) -> bool:
-                if not isinstance(leader_result, gl.vm.Return):
-                    return False
-                try:
-                    leader_data = normalize_score(leader_result.calldata)
-                except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
-                    return False
-
-                if not valid_score_payload(leader_data):
-                    return False
-
-                evidence_text = "No evidence URL was provided."
-                evidence_url = submission_memory.evidence_url
-                if evidence_url == "":
-                    evidence_url = first_url(evidence_hint_text)
-                if evidence_url != "":
                     try:
-                        response = gl.nondet.web.get(evidence_url)
-                        evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
-                    except Exception:
-                        evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
+                        raw_response = gl.nondet.exec_prompt(scoring_prompt, response_format="json")
+                        return normalize_score(raw_response)
+                    except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                        return {
+                            "score": 0,
+                            "accepted": False,
+                            "reason": "The referee could not parse a safe scoring result.",
+                            "xp_award": 0,
+                        }
 
-                validator_prompt = f"""You are validating a Truth Raiders game verdict.
+                def validator_fn(leader_result) -> bool:
+                    if not isinstance(leader_result, gl.vm.Return):
+                        return False
+                    try:
+                        leader_data = normalize_score(leader_result.calldata)
+                    except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                        return False
+
+                    if not valid_score_payload(leader_data):
+                        return False
+
+                    evidence_text = "No evidence URL was provided."
+                    evidence_url = submission_memory.evidence_url
+                    if evidence_url == "":
+                        evidence_url = first_url(evidence_hint_text)
+                    if evidence_url != "":
+                        try:
+                            response = gl.nondet.web.get(evidence_url)
+                            evidence_text = response.body.decode("utf-8", errors="replace")[:3600]
+                        except Exception:
+                            evidence_text = "Evidence fetch failed. Judge conservatively using the prompt and official answer key only."
+
+                    validator_prompt = f"""You are validating a Truth Raiders game verdict.
 
 Do not rescore from scratch. Decide if the leader verdict is acceptable for this prompt, answer, rubric, and evidence.
 
@@ -697,42 +801,19 @@ Return JSON only:
   "valid": true,
   "reason": "Short reason."
 }}"""
+                    try:
+                        raw_response = gl.nondet.exec_prompt(validator_prompt, response_format="json")
+                        parsed = parse_json(raw_response)
+                        return normalize_bool(parsed.get("valid", False))
+                    except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+                        return True
+
                 try:
-                    raw_response = gl.nondet.exec_prompt(validator_prompt, response_format="json")
-                    parsed = parse_json(raw_response)
-                    return normalize_bool(parsed.get("valid", False))
+                    verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
                 except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
-                    return True
+                    raise gl.vm.UserError(f"{ERROR_EXTERNAL} GenLayer scoring failed")
 
-            try:
-                verdict = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-            except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError):
-                raise gl.vm.UserError(f"{ERROR_EXTERNAL} GenLayer scoring failed")
-
-        score = clamp_score(verdict["score"])
-        xp_award = clamp_score(verdict["xp_award"])
-        accepted = bool(verdict["accepted"])
-
-        if not accepted:
-            xp_award = 0
-
-        submission.score = u8(score)
-        submission.xp_award = u256(xp_award)
-        submission.accepted = accepted
-        submission.reason = clean(str(verdict["reason"]), 240)
-        submission.scored_at = gl.message_raw["datetime"]
-        submissions[submission_index] = submission
-        self.room_submissions[key] = submissions
-
-        players = self._get_room_players(key)
-        player_index = self._find_player_index(players, player)
-        if player_index < 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Player has not joined")
-        player_record = players[player_index]
-        player_record.xp = u256(int(player_record.xp) + xp_award)
-        players[player_index] = player_record
-        self.room_players[key] = players
-        self._append_audit(gl.message.sender_address, "ROUND_SCORED", key, submission.reason)
+        self._apply_score(key, submissions, submission_index, player, verdict)
 
     @gl.public.write
     def finalize_room(self, room_id: int):
