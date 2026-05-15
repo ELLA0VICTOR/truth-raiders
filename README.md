@@ -9,7 +9,7 @@ The project is designed around the GenLayer mission brief: short multiplayer roo
 The frontend is configured for GenLayer StudioNet.
 
 ```text
-Contract: 0x3Da7B1728b30c7eeba65BbafA3Cb9C188fFdAa0D
+Contract: 0xedd93D6812f2Ba7ae116Caa166C029D79844C160
 Network:  StudioNet
 RPC:      https://studio.genlayer.com/api
 ```
@@ -138,7 +138,7 @@ cp .env.example .env
 Then set:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x3Da7B1728b30c7eeba65BbafA3Cb9C188fFdAa0D
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xedd93D6812f2Ba7ae116Caa166C029D79844C160
 ```
 
 If you redeploy the contract, update:
@@ -188,7 +188,7 @@ Install Command:  npm install
 Environment variable:
 
 ```text
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x3Da7B1728b30c7eeba65BbafA3Cb9C188fFdAa0D
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0xedd93D6812f2Ba7ae116Caa166C029D79844C160
 ```
 
 No serverless backend is required. The browser talks directly to GenLayer StudioNet through `genlayer-js`.

@@ -39,10 +39,11 @@ function debugSubmitError(stage, error, payload = {}) {
 }
 
 function getInitialRoomId() {
-  if (typeof window === 'undefined') return 0
+  if (typeof window === 'undefined') return null
   const rawRoom = new URLSearchParams(window.location.search).get('room')
+  if (rawRoom === null || rawRoom.trim() === '') return null
   const roomId = Number(rawRoom)
-  return Number.isInteger(roomId) && roomId >= 0 ? roomId : 0
+  return Number.isInteger(roomId) && roomId >= 0 ? roomId : null
 }
 
 function roomCodeForId(roomId) {
@@ -513,7 +514,7 @@ function LobbyPage({
 
       <div className="room-card-grid">
         {rooms.map((room) => (
-          <article className={`room-card ${Number(room.id) === Number(selectedRoomId) ? 'is-selected' : ''}`} key={room.id}>
+          <article className={`room-card ${selectedRoomId !== null && Number(room.id) === Number(selectedRoomId) ? 'is-selected' : ''}`} key={room.id}>
             <div className="room-card-top">
               <span className="kicker">Room #{room.id}</span>
               <b>{room.status}</b>
@@ -946,9 +947,11 @@ function ChallengeModal({
 function PlayPage({
   chambers,
   selectedRoom,
+  hasSelectedRoom,
   raidStarted,
   raidEnded,
   startRaid,
+  startNewRoom,
   timeLeftSeconds,
   timerToast,
   openedLevelIndex,
@@ -982,7 +985,7 @@ function PlayPage({
   readiness,
 }) {
   const activeChamber = openedLevelIndex === null ? null : chambers[openedLevelIndex]
-  const roomLabel = selectedRoom?.room_code || `Room #${contract.roomId}`
+  const roomLabel = hasSelectedRoom ? selectedRoom?.room_code || `Room #${contract.roomId}` : 'New raid room'
   const levelNumber = openedLevelIndex === null ? '--' : String(openedLevelIndex + 1).padStart(2, '0')
   const clockLabel = formatClock(timeLeftSeconds)
   const timerPhase = getTimerPhase(timeLeftSeconds, raidEnded)
@@ -990,6 +993,8 @@ function PlayPage({
     ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
+      : !hasSelectedRoom
+        ? 'Create a new room or select one from the lobby first.'
       : roomJoined
         ? 'This wallet is already joined from on-chain state.'
       : chainSyncStatus !== 'ready'
@@ -1003,7 +1008,7 @@ function PlayPage({
             : ''
   const canJoinRoom = joinDisabledReason === ''
   const createDisabledReason = !contract.configured
-    ? 'Contract is not configured.'
+      ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
       : !roomSettings.seasonCode.trim()
@@ -1014,8 +1019,8 @@ function PlayPage({
         ? 'XP pool must be greater than 0.'
       : chainSyncStatus !== 'ready'
         ? 'Checking whether room already exists.'
-      : roomCreated
-        ? 'Room already exists.'
+      : hasSelectedRoom && roomCreated
+        ? 'Use New room first, or join the selected room.'
         : contract.isLoading
           ? 'Transaction in progress.'
           : ''
@@ -1024,7 +1029,7 @@ function PlayPage({
     if (!contract.configured) return 'Contract is not configured.'
     if (!walletAddress) return 'Connect a wallet first.'
     if (chainSyncStatus !== 'ready') return 'Syncing room and player state from GenLayer...'
-    if (!roomCreated) return 'Create or select a live room first.'
+    if (!hasSelectedRoom || !roomCreated) return 'Create or select a live room first.'
     if (!roomJoined) return 'Join the room before starting the raid.'
     if (contract.isLoading) return 'Transaction in progress.'
     return ''
@@ -1075,7 +1080,9 @@ function PlayPage({
         <div>
           <span className="kicker">{roomLabel}</span>
           <strong>
-            {roomJoined
+            {!hasSelectedRoom
+              ? 'Create a new room or choose one from Lobby'
+              : roomJoined
               ? 'Joined and ready'
               : contract.configured
                 ? roomCreated
@@ -1085,7 +1092,9 @@ function PlayPage({
                     : 'Syncing room from GenLayer'
                 : 'Deploy contract to join on-chain'}
           </strong>
-          {contract.configured ? (
+          {!hasSelectedRoom ? (
+            <small>No room selected yet. Creating a room will assign the next on-chain room ID.</small>
+          ) : contract.configured ? (
             <small>Contract room #{contract.roomId}{selectedRoom?.player_count !== undefined ? ` / ${selectedRoom.player_count} players` : ''}</small>
           ) : (
             <small>Set VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS after deployment.</small>
@@ -1137,6 +1146,11 @@ function PlayPage({
           </div>
         )}
         <div className="room-actions">
+          {hasSelectedRoom && roomCreated && (
+            <button className="secondary-action" type="button" onClick={startNewRoom}>
+              New room
+            </button>
+          )}
           <button
             className="secondary-action"
             type="button"
@@ -1342,7 +1356,8 @@ function App() {
   const [isRoundFlowActive, setIsRoundFlowActive] = useState(false)
   const timerWarningRef = useRef({ warning: false, danger: false, final: false })
 
-  const contract = useTruthRaidersContract(walletAddress, selectedRoomId)
+  const hasSelectedRoom = selectedRoomId !== null && selectedRoomId !== undefined
+  const contract = useTruthRaidersContract(walletAddress, hasSelectedRoom ? selectedRoomId : 0)
   const {
     configured: contractConfigured,
     getRoom,
@@ -1357,8 +1372,8 @@ function App() {
     getPackLevel,
   } = contract
   const selectedRoom = useMemo(
-    () => rooms.find((room) => Number(room.id) === Number(selectedRoomId)) || null,
-    [rooms, selectedRoomId]
+    () => hasSelectedRoom ? rooms.find((room) => Number(room.id) === Number(selectedRoomId)) || null : null,
+    [hasSelectedRoom, rooms, selectedRoomId]
   )
   const connectedPlayer = useMemo(
     () => leaderboardPlayers.find((player) => normalizeWallet(player.wallet) === normalizeWallet(walletAddress)),
@@ -1460,10 +1475,17 @@ function App() {
 
   useEffect(() => {
     const url = new URL(window.location.href)
+    if (!hasSelectedRoom) {
+      if (!url.searchParams.has('room')) return
+      url.searchParams.delete('room')
+      window.history.replaceState({}, '', url)
+      return
+    }
+
     if (url.searchParams.get('room') === String(selectedRoomId)) return
     url.searchParams.set('room', String(selectedRoomId))
     window.history.replaceState({}, '', url)
-  }, [selectedRoomId])
+  }, [hasSelectedRoom, selectedRoomId])
 
   useEffect(() => {
     if (!contractConfigured) return undefined
@@ -1517,6 +1539,13 @@ function App() {
 
   useEffect(() => {
     if (!contractConfigured) return undefined
+    if (!hasSelectedRoom) {
+      setRoomCreated(false)
+      setRoomJoined(false)
+      setLeaderboardPlayers([])
+      setChainSyncStatus('ready')
+      return undefined
+    }
 
     let cancelled = false
 
@@ -1561,7 +1590,7 @@ function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount, isRoundFlowActive])
+  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount, hasSelectedRoom, isRoundFlowActive])
 
   useEffect(() => {
     if (!contractConfigured) {
@@ -1756,6 +1785,17 @@ function App() {
     window.setTimeout(() => setLobbyNotice(''), 2600)
   }
 
+  function startNewRoom(tab = 'play') {
+    setSelectedRoomId(null)
+    setActiveTab(tab)
+    setRoomSettings((current) => ({
+      ...current,
+      roomCode: '',
+    }))
+    setLobbyNotice('New room setup ready.')
+    window.setTimeout(() => setLobbyNotice(''), 2600)
+  }
+
   function showPlayNotice(message, duration = 3000) {
     setActiveTab('play')
     setLevelNotice(message)
@@ -1878,7 +1918,10 @@ function App() {
     if (!walletAddress || !contract.configured) return
     try {
       const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
-      const roomCode = roomSettings.roomCode.trim() || roomCodeForId(nextRoomId)
+      const configuredRoomCode = roomSettings.roomCode.trim()
+      const roomCode = !configuredRoomCode || (configuredRoomCode === RAID_SEASON.roomCode && nextRoomId > 0)
+        ? roomCodeForId(nextRoomId)
+        : configuredRoomCode
       const seasonCode = roomSettings.seasonCode.trim() || RAID_SEASON.code
       const xpPool = Math.max(1, Number(roomSettings.xpPool || RAID_SEASON.xpPool))
       const receipt = await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool)
@@ -2288,9 +2331,11 @@ function App() {
         <PlayPage
           chambers={roomChambers}
           selectedRoom={selectedRoom}
+          hasSelectedRoom={hasSelectedRoom}
           raidStarted={raidStarted}
           raidEnded={raidEnded}
           startRaid={startRaid}
+          startNewRoom={startNewRoom}
           timeLeftSeconds={timeLeftSeconds}
           timerToast={timerToast}
           openedLevelIndex={openedLevelIndex}
