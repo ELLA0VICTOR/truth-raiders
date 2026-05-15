@@ -57,7 +57,7 @@ The frontend includes:
 Create `.env` from `.env.example` after deploying the contract:
 
 ```bash
-VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x1530cdd48d1c7BD5Fa702d690446d65f50290d11
+VITE_TRUTH_RAIDERS_CONTRACT_ADDRESS=0x87D8205bf4338034a1234D8De645A955BC8Fd85a
 VITE_GENLAYER_NETWORK=studionet
 VITE_GENLAYER_RPC_URL=https://studio.genlayer.com/api
 ```
@@ -67,7 +67,7 @@ The frontend is currently configured for StudioNet only. After redeploying `cont
 Current StudioNet deployment:
 
 ```text
-0x1530cdd48d1c7BD5Fa702d690446d65f50290d11
+0x87D8205bf4338034a1234D8De645A955BC8Fd85a
 ```
 
 ## Assets

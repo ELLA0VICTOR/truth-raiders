@@ -3,6 +3,16 @@ import { createClient } from 'genlayer-js'
 import { ExecutionResult, TransactionStatus } from 'genlayer-js/types'
 import { ACTIVE_CHAIN, CONTRACT_ADDRESS, GENLAYER_NETWORK, GENLAYER_RPC_URL, ensureGenLayerNetwork, isContractConfigured } from '../config/genlayer'
 
+const DEBUG_PREFIX = '[TruthRaiders:contract]'
+
+function summarizeArg(arg) {
+  if (typeof arg === 'string' && arg.length > 180) {
+    return `${arg.slice(0, 180)}... (${arg.length} chars)`
+  }
+
+  return arg
+}
+
 export function useTruthRaidersContract(walletAddress, roomId = 0) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -37,30 +47,52 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
       setIsLoading(true)
       setError('')
       try {
+        console.groupCollapsed(`${DEBUG_PREFIX} write:${functionName}`)
+        console.info('contract', CONTRACT_ADDRESS)
+        console.info('wallet', walletAddress)
+        console.info('roomId', activeRoomId)
+        console.info('args', args.map(summarizeArg))
+
         if (window.ethereum) {
+          console.info('ensuring wallet network', GENLAYER_NETWORK)
           await ensureGenLayerNetwork(window.ethereum)
         }
+
+        console.info('connecting write client')
         await writeClient.connect(GENLAYER_NETWORK)
 
+        console.info('sending transaction')
         const hash = await writeClient.writeContract({
           address: CONTRACT_ADDRESS,
           functionName,
           args,
         })
+        console.info('transaction hash', hash)
 
+        console.info('waiting for ACCEPTED receipt')
         const receipt = await readClient.waitForTransactionReceipt({
           hash,
           status: TransactionStatus.ACCEPTED,
           fullTransaction: false,
         })
+        console.info('receipt', receipt)
 
         if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR) {
+          console.error('contract execution finished with error', receipt)
           throw new Error('Transaction accepted but contract execution failed.')
         }
 
+        if (!receipt.txExecutionResultName) {
+          console.info('receipt does not expose execution result yet; state reads will verify completion', receipt)
+        }
+
+        console.info('write complete', functionName)
+        console.groupEnd()
         return receipt
       } catch (contractError) {
         const message = contractError?.message || `Contract call failed: ${functionName}`
+        console.error(`${DEBUG_PREFIX} write failed:${functionName}`, contractError)
+        console.groupEnd()
         setError(message)
         throw contractError
       } finally {
@@ -129,6 +161,13 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
   const getSubmission = useCallback(
     (roundId, player) => {
       return readContract('get_submission', [activeRoomId, roundId, player])
+    },
+    [activeRoomId, readContract]
+  )
+
+  const getSubmissionStatus = useCallback(
+    (roundId, player) => {
+      return readContract('get_submission_status', [activeRoomId, roundId, player])
     },
     [activeRoomId, readContract]
   )
@@ -234,6 +273,7 @@ export function useTruthRaidersContract(walletAddress, roomId = 0) {
     getQuestionPack,
     getPackLevel,
     getSubmission,
+    getSubmissionStatus,
     createRoom,
     createRoomFromPack,
     addModerator,

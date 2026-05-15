@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import TruthRaidersGame from './game/TruthRaidersGame'
 import { useTruthRaidersContract } from './hooks/useTruthRaidersContract'
 import {
@@ -21,6 +22,21 @@ const TABS = [
   { id: 'admin', label: 'Admin' },
   { id: 'faq', label: 'FAQ' },
 ]
+
+const DEBUG_PREFIX = '[TruthRaiders:submit]'
+
+function debugSubmit(stage, payload = {}) {
+  console.info(`${DEBUG_PREFIX} ${stage}`, payload)
+}
+
+function debugSubmitError(stage, error, payload = {}) {
+  console.error(`${DEBUG_PREFIX} ${stage}`, {
+    ...payload,
+    error,
+    message: error?.message,
+    stack: error?.stack,
+  })
+}
 
 function getInitialRoomId() {
   if (typeof window === 'undefined') return 0
@@ -680,11 +696,10 @@ function ChallengeModal({
   clockLabel,
   timerPhase,
 }) {
+  const modalRef = useRef(null)
+
   useEffect(() => {
     if (!activeChamber) return undefined
-
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
 
     function handleEscape(event) {
       if (event.key === 'Escape' && !contract.isLoading) onClose()
@@ -692,18 +707,23 @@ function ChallengeModal({
 
     window.addEventListener('keydown', handleEscape)
     return () => {
-      document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleEscape)
     }
   }, [activeChamber, contract.isLoading, onClose])
 
+  useEffect(() => {
+    if (modalRef.current) {
+      modalRef.current.scrollTop = 0
+    }
+  }, [activeChamber?.id])
+
   if (!activeChamber) return null
 
-  return (
+  return createPortal(
     <div className="challenge-modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !contract.isLoading) onClose()
     }}>
-      <section className="challenge-modal" role="dialog" aria-modal="true" aria-labelledby="challenge-title">
+      <section ref={modalRef} className="challenge-modal" role="dialog" aria-modal="true" aria-labelledby="challenge-title">
         <div className={`modal-command-strip ${timerPhase}`}>
           <span>Level {levelNumber} / {clockLabel}</span>
           <button type="button" onClick={onClose} aria-label="Close challenge">
@@ -778,11 +798,6 @@ function ChallengeModal({
             </div>
           )}
 
-          <div className="score-strip readiness-strip">
-            <span>{readiness.label}</span>
-            <strong>{readiness.completed}/{readiness.required}</strong>
-          </div>
-
           {!walletAddress && (
             <div className="wallet-gate">
               <strong>Wallet needed for scored submissions</strong>
@@ -799,7 +814,12 @@ function ChallengeModal({
               <p>{contract.configured ? 'Add a handle in the room console so the contract can register your run.' : 'Deploy and configure the contract address before final scoring.'}</p>
             </div>
           )}
-
+        </div>
+        <div className="modal-submit-bar">
+          <div className="score-strip readiness-strip">
+            <span>{readiness.label}</span>
+            <strong>{readiness.completed}/{readiness.required}</strong>
+          </div>
           <button
             className="primary-action wide"
             type="button"
@@ -814,7 +834,8 @@ function ChallengeModal({
           {contract.error && <p className="contract-error">{contract.error}</p>}
         </div>
       </section>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -841,6 +862,8 @@ function PlayPage({
   setHandle,
   roomCreated,
   roomJoined,
+  roomSettings,
+  setRoomSettings,
   chainSyncStatus,
   createRoom,
   joinRoom,
@@ -879,6 +902,12 @@ function PlayPage({
     ? 'Contract is not configured.'
     : !walletAddress
       ? 'Connect a wallet first.'
+      : !roomSettings.seasonCode.trim()
+        ? 'Enter a season code.'
+      : !roomSettings.roomCode.trim()
+        ? 'Enter a room code.'
+      : Number(roomSettings.xpPool) <= 0
+        ? 'XP pool must be greater than 0.'
       : chainSyncStatus !== 'ready'
         ? 'Checking whether room already exists.'
       : roomCreated
@@ -950,6 +979,42 @@ function PlayPage({
             disabled={roomJoined}
           />
         </label>
+        {!roomCreated && (
+          <div className="room-setup-fields">
+            <label>
+              Season code
+              <input
+                value={roomSettings.seasonCode}
+                onChange={(event) => setRoomSettings((current) => ({ ...current, seasonCode: event.target.value }))}
+                placeholder="WEEK-01 / FALSE-LIGHT CATACOMBS"
+                disabled={contract.isLoading}
+              />
+            </label>
+            <label>
+              Room code
+              <input
+                value={roomSettings.roomCode}
+                onChange={(event) => setRoomSettings((current) => ({ ...current, roomCode: event.target.value }))}
+                placeholder="TRUTH-7C2"
+                disabled={contract.isLoading}
+              />
+            </label>
+            <label>
+              XP pool
+              <input
+                value={roomSettings.xpPool}
+                onChange={(event) => setRoomSettings((current) => ({ ...current, xpPool: event.target.value.replace(/[^\d]/g, '') }))}
+                placeholder="1200"
+                inputMode="numeric"
+                disabled={contract.isLoading}
+              />
+            </label>
+            <div className="readonly-room-field">
+              <span>Rounds</span>
+              <strong>{chambers.length}</strong>
+            </div>
+          </div>
+        )}
         <div className="room-actions">
           <button
             className="secondary-action"
@@ -1124,6 +1189,11 @@ function App() {
   const [packSeason, setPackSeason] = useState(RAID_SEASON.code)
   const [packBuilder, setPackBuilder] = useState(createBuilderFromChambers)
   const [packNotice, setPackNotice] = useState('')
+  const [roomSettings, setRoomSettings] = useState({
+    seasonCode: RAID_SEASON.code,
+    roomCode: RAID_SEASON.roomCode,
+    xpPool: String(RAID_SEASON.xpPool),
+  })
   const [roomSearch, setRoomSearch] = useState('')
   const [lobbyNotice, setLobbyNotice] = useState('')
   const [raidStarted, setRaidStarted] = useState(false)
@@ -1147,6 +1217,7 @@ function App() {
   const [progressRefreshKey, setProgressRefreshKey] = useState(0)
   const [chainSyncStatus, setChainSyncStatus] = useState('idle')
   const [pendingJudgingKeys, setPendingJudgingKeys] = useState([])
+  const [isRoundFlowActive, setIsRoundFlowActive] = useState(false)
   const timerWarningRef = useRef({ warning: false, danger: false, final: false })
 
   const contract = useTruthRaidersContract(walletAddress, selectedRoomId)
@@ -1156,7 +1227,7 @@ function App() {
     getRoomById,
     getLeaderboard,
     getRoomCount,
-    getSubmission,
+    getSubmissionStatus,
     getAdmin,
     isModerator,
     getPackCount,
@@ -1276,21 +1347,24 @@ function App() {
     if (!contractConfigured) return undefined
 
     let cancelled = false
-    refreshRooms()
-    refreshPacks()
+    if (!isRoundFlowActive) {
+      refreshRooms()
+      refreshPacks()
+    }
 
     const interval = window.setInterval(() => {
-      if (!cancelled) refreshRooms()
-    }, 12000)
+      if (!cancelled && !isRoundFlowActive) refreshRooms()
+    }, 30000)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contractConfigured, refreshPacks, refreshRooms])
+  }, [contractConfigured, isRoundFlowActive, refreshPacks, refreshRooms])
 
   useEffect(() => {
     if (!contractConfigured) return undefined
+    if (isRoundFlowActive) return undefined
 
     let cancelled = false
 
@@ -1359,13 +1433,13 @@ function App() {
     }
 
     syncContractState()
-    const interval = window.setInterval(syncContractState, 8000)
+    const interval = window.setInterval(syncContractState, 30000)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount])
+  }, [contract.roomId, contractConfigured, getLeaderboard, getRoom, getRoomCount, isRoundFlowActive])
 
   useEffect(() => {
     if (!contractConfigured) {
@@ -1397,13 +1471,15 @@ function App() {
 
   useEffect(() => {
     if (!contractConfigured || !walletAddress || !isJoined) return undefined
+    if (isRoundFlowActive) return undefined
+    if (progressRefreshKey === 0 && Number(connectedPlayer?.xp || 0) <= 0) return undefined
 
     let cancelled = false
-    Promise.allSettled(roomChambers.map((chamber, index) => getSubmission(index, walletAddress).then((submission) => ({ chamber, submission }))))
+    Promise.allSettled(roomChambers.map((chamber, index) => getSubmissionStatus(index, walletAddress).then((submission) => ({ chamber, submission }))))
       .then((results) => {
         if (cancelled) return
         const restored = results
-          .filter((result) => result.status === 'fulfilled' && result.value.submission?.scored_at)
+          .filter((result) => result.status === 'fulfilled' && result.value.submission?.scored)
           .map((result) => ({
             playerId: 'you',
             wallet: walletAddress,
@@ -1430,17 +1506,18 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [contractConfigured, getSubmission, handle, isJoined, progressRefreshKey, roomChambers, walletAddress])
+  }, [connectedPlayer, contractConfigured, getSubmissionStatus, handle, isJoined, isRoundFlowActive, progressRefreshKey, roomChambers, walletAddress])
 
   useEffect(() => {
     if (!contractConfigured || !walletAddress || !isJoined) return undefined
+    if (isRoundFlowActive) return undefined
 
     const interval = window.setInterval(() => {
       setProgressRefreshKey((key) => key + 1)
-    }, 12000)
+    }, 45000)
 
     return () => window.clearInterval(interval)
-  }, [contractConfigured, isJoined, walletAddress])
+  }, [contractConfigured, isJoined, isRoundFlowActive, walletAddress])
 
   useEffect(() => {
     setRoomCreated(false)
@@ -1625,8 +1702,10 @@ function App() {
     if (!walletAddress || !contract.configured) return
     try {
       const nextRoomId = Number(await getRoomCount().catch(() => rooms.length))
-      const roomCode = roomCodeForId(nextRoomId)
-      await contract.createRoom(RAID_SEASON.code, roomCode, roomChambers.length, RAID_SEASON.xpPool)
+      const roomCode = roomSettings.roomCode.trim() || roomCodeForId(nextRoomId)
+      const seasonCode = roomSettings.seasonCode.trim() || RAID_SEASON.code
+      const xpPool = Math.max(1, Number(roomSettings.xpPool || RAID_SEASON.xpPool))
+      await contract.createRoom(seasonCode, roomCode, roomChambers.length, xpPool)
       await refreshRooms()
       selectRoom(nextRoomId, 'play')
       setRoomCreated(true)
@@ -1763,12 +1842,45 @@ function App() {
   }
 
   async function submitChamber() {
+    debugSubmit('click', {
+      walletAddress,
+      roomId: contract.roomId,
+      openedLevelIndex,
+      raidStarted,
+      raidEnded,
+      timeLeftSeconds,
+      isJoined,
+      configured: contract.configured,
+      readiness,
+      activeChamber: activeChamber
+        ? {
+            id: activeChamber.id,
+            label: activeChamber.label,
+            title: activeChamber.title,
+            questionCount: activeChamber.questions?.length || 0,
+          }
+        : null,
+      selectedAnswers,
+      selectedEvidenceUrl,
+    })
+
     if (raidEnded || !raidStarted || timeLeftSeconds <= 0) {
       setJudgingStatus('Raid timer ended. Game over.')
+      debugSubmit('blocked:timer-ended', { raidEnded, raidStarted, timeLeftSeconds })
       return
     }
 
-    if (!activeChamber || openedLevelIndex === null || !walletAddress || !isJoined || !readiness.ready || !contract.configured) return
+    if (!activeChamber || openedLevelIndex === null || !walletAddress || !isJoined || !readiness.ready || !contract.configured) {
+      debugSubmit('blocked:preflight', {
+        hasActiveChamber: Boolean(activeChamber),
+        openedLevelIndex,
+        walletAddress,
+        isJoined,
+        readiness,
+        configured: contract.configured,
+      })
+      return
+    }
 
     const roundId = openedLevelIndex
     const pendingKey = `${normalizeWallet(walletAddress)}:${roundId}`
@@ -1776,56 +1888,113 @@ function App() {
     const prompt = `${activeChamber.prompt}\nQuestion count: ${activeChamber.questions.length}\nEvidence choices:\n${activeChamber.evidence.map((item) => `- ${item.title}: ${item.url}`).join('\n')}`
     const rubric = `${activeChamber.scoring.join(',')}\nAnswer key:\n${buildAnswerKey(activeChamber)}`
 
-    async function waitForSubmission() {
-      for (let attempt = 0; attempt < 45; attempt += 1) {
+    console.groupCollapsed(`${DEBUG_PREFIX} level ${roundId + 1} flow`)
+    debugSubmit('packet-built', {
+      roundId,
+      pendingKey,
+      answerPacket,
+      selectedEvidenceUrl,
+      promptPreview: prompt.slice(0, 500),
+      rubricPreview: rubric.slice(0, 500),
+    })
+
+    async function waitForScoredSubmission() {
+      for (let attempt = 0; attempt < 18; attempt += 1) {
         try {
-          return await contract.getSubmission(roundId, walletAddress)
-        } catch {
-          await sleep(4000)
+          const latestSubmission = await contract.getSubmissionStatus(roundId, walletAddress)
+          debugSubmit('score-readback', { attempt: attempt + 1, latestSubmission })
+          if (latestSubmission?.scored) return latestSubmission
+        } catch (readError) {
+          if (attempt === 0 || (attempt + 1) % 6 === 0) {
+            debugSubmit('score-readback-not-ready', {
+              attempt: attempt + 1,
+              message: readError?.message,
+            })
+          }
         }
+        await sleep(5000)
       }
       return null
     }
 
+    setIsRoundFlowActive(true)
+    let submission = null
     try {
-      let submission = null
       const isPendingJudging = pendingJudgingKeys.includes(pendingKey)
       setJudgingStatus('Checking whether this level already has a saved answer...')
+      debugSubmit('checking-existing-submission', { roundId, player: walletAddress, isPendingJudging })
 
       try {
-        submission = await contract.getSubmission(roundId, walletAddress)
-      } catch {
-        if (isPendingJudging) {
-          setJudgingStatus('Your answer is already saved. GenLayer has not exposed it to reads yet; click this button again in a moment to run judging.')
-          return
+        submission = await contract.getSubmissionStatus(roundId, walletAddress)
+        debugSubmit('existing-submission-found', { submission })
+        if (!submission?.exists) {
+          submission = null
+          if (isPendingJudging) {
+            setJudgingStatus('Answer was already sent. Running GenLayer judging now...')
+            debugSubmit('pending-read-skipped:direct-score', { pendingKey })
+          } else {
+            setJudgingStatus('Saving your answer on GenLayer...')
+            debugSubmit('submit-round:start', {
+              roundId,
+              chamber: activeChamber.label,
+              evidenceUrl: selectedEvidenceUrl,
+            })
+            await contract.submitRound(roundId, activeChamber.label, answerPacket, selectedEvidenceUrl)
+            debugSubmit('submit-round:executed')
+            setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
+          }
         }
-
-        setJudgingStatus('Saving your answer on GenLayer...')
-        await contract.submitRound(roundId, activeChamber.label, answerPacket, selectedEvidenceUrl)
-        setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
-        setJudgingStatus('Answer saved. Waiting for accepted state before judging...')
-        submission = await waitForSubmission()
-
-        if (!submission) {
-          setJudgingStatus('Answer saved on-chain. GenLayer is still catching up; click this button again shortly to run judging.')
-          return
+      } catch (submissionError) {
+        debugSubmit('no-existing-submission', { message: submissionError?.message })
+        if (isPendingJudging) {
+          setJudgingStatus('Answer was already sent. Running GenLayer judging now...')
+          debugSubmit('pending-read-skipped:direct-score', { pendingKey })
+        } else {
+          setJudgingStatus('Saving your answer on GenLayer...')
+          debugSubmit('submit-round:start', {
+            roundId,
+            chamber: activeChamber.label,
+            evidenceUrl: selectedEvidenceUrl,
+          })
+          await contract.submitRound(roundId, activeChamber.label, answerPacket, selectedEvidenceUrl)
+          debugSubmit('submit-round:executed')
+          setPendingJudgingKeys((keys) => (keys.includes(pendingKey) ? keys : [...keys, pendingKey]))
         }
       }
 
-      if (!submission?.scored_at) {
+      if (!submission?.scored) {
         setJudgingStatus('Running GenLayer judging. This can take 30-60 seconds.')
+        debugSubmit('score-round:start', {
+          roundId,
+          player: walletAddress,
+          promptLength: prompt.length,
+          rubricLength: rubric.length,
+        })
         await contract.scoreRound(roundId, walletAddress, prompt, rubric)
+        debugSubmit('score-round:executed')
+        setJudgingStatus('Judging transaction accepted. Waiting for XP readback...')
+        submission = await waitForScoredSubmission()
+        if (!submission?.scored) {
+          setJudgingStatus('Judging was submitted, but StudioNet has not exposed the scored result yet. Check leaderboard again shortly.')
+          debugSubmit('score-readback-timeout', { roundId, player: walletAddress })
+        }
         setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
       } else {
         setJudgingStatus('This level was already judged. Unlocking the next level...')
+        debugSubmit('score-round:already-scored', { scoredAt: submission.scored_at })
         setPendingJudgingKeys((keys) => keys.filter((key) => key !== pendingKey))
       }
-      const players = await getLeaderboard()
-      if (Array.isArray(players)) setLeaderboardPlayers(players)
+      const players = submission?.scored ? await getLeaderboard() : []
+      debugSubmit('leaderboard-refreshed', { players, submission })
+      if (Array.isArray(players) && players.length > 0) setLeaderboardPlayers(players)
       setProgressRefreshKey((key) => key + 1)
     } catch (error) {
+      debugSubmitError('flow-failed', error, { roundId, pendingKey })
+      console.groupEnd()
       setJudgingStatus(error?.message || 'The answer was saved, but judging did not finish. Click the button again in a moment.')
       return
+    } finally {
+      setIsRoundFlowActive(false)
     }
 
     setSubmissions((current) => [
@@ -1841,6 +2010,8 @@ function App() {
         tasks: activeChamber.tasks,
         scoring: activeChamber.scoring,
         status: 'scored',
+        score: submission?.score,
+        xpAward: submission?.xp_award,
         createdAt: new Date().toISOString(),
       },
     ])
@@ -1849,7 +2020,13 @@ function App() {
     setOpenedLevelIndex(null)
     setActiveChamberIndex((index) => Math.min(roomChambers.length - 1, index + 1))
     setLevelNotice(`Level ${openedLevelIndex + 1} cleared. Level ${Math.min(roomChambers.length, openedLevelIndex + 2)} unlocked.`)
-    setJudgingStatus('Judging complete. XP has been written on-chain.')
+    setJudgingStatus(
+      submission?.scored
+        ? `Judging complete. Score ${submission.score}/100, XP +${submission.xp_award}.`
+        : 'Level complete. XP is still syncing from StudioNet; check leaderboard again shortly.'
+    )
+    debugSubmit('flow-complete', { nextLevelIndex: Math.min(roomChambers.length - 1, openedLevelIndex + 1) })
+    console.groupEnd()
   }
 
   return (
@@ -1905,6 +2082,8 @@ function App() {
           setHandle={setHandle}
           roomCreated={roomCreated}
           roomJoined={isJoined}
+          roomSettings={roomSettings}
+          setRoomSettings={setRoomSettings}
           chainSyncStatus={chainSyncStatus}
           createRoom={createRaidRoom}
           joinRoom={joinRoom}

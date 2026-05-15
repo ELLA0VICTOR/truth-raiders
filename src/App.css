@@ -508,6 +508,38 @@ h1 {
   gap: 10px;
 }
 
+.room-setup-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 0.8fr) minmax(120px, 0.45fr) 120px;
+  gap: 12px;
+  border-top: 1px solid rgba(217, 205, 167, 0.12);
+  padding-top: 14px;
+}
+
+.readonly-room-field {
+  display: grid;
+  align-content: end;
+  min-height: 67px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px 12px;
+}
+
+.readonly-room-field span {
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.readonly-room-field strong {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 16px;
+}
+
 .join-hint {
   grid-column: 1 / -1;
   color: var(--gold) !important;
@@ -579,25 +611,33 @@ h1 {
 .challenge-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 9999;
   display: grid;
-  place-items: center;
-  padding: 20px;
+  align-items: start;
+  justify-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(96px, env(safe-area-inset-bottom));
   background: rgba(3, 5, 4, 0.78);
   backdrop-filter: blur(12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--gold) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
 }
 
 .challenge-modal {
   width: min(960px, 100%);
-  max-height: min(88vh, 860px);
+  margin: 0 auto;
   border: 1px solid rgba(217, 205, 167, 0.22);
   background: rgba(10, 12, 8, 0.98);
   box-shadow: 0 34px 120px rgba(0, 0, 0, 0.68);
   animation: modalReveal 180ms ease-out both;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .modal-command-strip {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -639,11 +679,26 @@ h1 {
 }
 
 .modal-scroll {
-  max-height: calc(min(88vh, 860px) - 50px);
-  overflow-y: auto;
-  padding: clamp(18px, 3vw, 28px);
-  scrollbar-color: var(--gold) rgba(255, 255, 255, 0.06);
-  scrollbar-width: thin;
+  padding: clamp(16px, 2.6vw, 24px) clamp(16px, 2.8vw, 26px) 18px;
+}
+
+.modal-submit-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  border-top: 1px solid var(--line);
+  background: rgba(8, 10, 7, 0.98);
+  padding: 10px clamp(16px, 2.8vw, 26px) max(12px, env(safe-area-inset-bottom));
+}
+
+.modal-submit-bar .score-strip {
+  margin: 0 0 10px;
+}
+
+.modal-submit-bar .judging-status,
+.modal-submit-bar .submit-hint,
+.modal-submit-bar .contract-error {
+  margin-top: 8px;
 }
 
 .challenge-modal h2 {
@@ -1663,6 +1718,7 @@ input:focus {
   }
 
   .room-console,
+  .room-setup-fields,
   .room-search-panel,
   .artifact-panel {
     grid-template-columns: 1fr;
