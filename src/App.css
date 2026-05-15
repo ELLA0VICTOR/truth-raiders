@@ -1855,16 +1855,31 @@ select:focus {
   }
 
   .site-nav nav {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    display: flex;
     gap: 6px;
     width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 2px 8px;
+    scroll-padding-inline: 2px;
+    scroll-snap-type: x proximity;
+    scrollbar-color: rgba(201, 181, 107, 0.55) rgba(255, 255, 255, 0.04);
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
   }
 
   .site-nav nav button {
+    flex: 0 0 auto;
     min-height: 42px;
     padding: 9px 8px;
     font-size: 10px;
+    white-space: nowrap;
+    scroll-snap-align: start;
+  }
+
+  .site-nav nav button.is-active {
+    box-shadow: inset 0 -2px 0 rgba(201, 181, 107, 0.72);
   }
 
   h1,
@@ -2076,7 +2091,12 @@ select:focus {
 
 @media (max-width: 420px) {
   .site-nav nav {
-    grid-template-columns: 1fr;
+    margin-inline: -2px;
+  }
+
+  .site-nav nav button {
+    min-width: max-content;
+    padding-inline: 10px;
   }
 
   .page-title,
